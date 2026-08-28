@@ -5,7 +5,13 @@
             <strong>{{ emptyMessage.title }}</strong>
             <small>{{ emptyMessage.text }}</small>
         </div>
-        <div v-if="angleCapableOperation && operationToolVisible" ref="operationControls" class="scene-operation-tool">
+        <div
+            v-if="angleCapableOperation && operationToolVisible"
+            ref="operationControls"
+            class="scene-operation-tool"
+            @pointerenter="keepOperationToolVisible"
+            @pointerleave="releaseOperationTool"
+        >
             <button
                 v-if="!anglePanelOpen"
                 class="scene-operation-trigger"
@@ -21,7 +27,7 @@
             </button>
             <div v-else class="scene-operation-controls">
                 <div class="scene-operation-title">
-                    <div><span>{{ selectedOperationLabel }}</span><small>Настройка плоскости реза</small></div>
+                    <div><span>{{ selectedOperationLabel }}</span><small>Угол и глубина пропила</small></div>
                     <button type="button" aria-label="Закрыть настройки углов" @click="anglePanelOpen = false">×</button>
                 </div>
                 <div v-if="selectedOperation.type === 'cross_cut'" class="scene-angle-editor">
@@ -38,10 +44,33 @@
                         <span><input :value="selectedOperation.bevel_angle" type="number" min="-45" max="45" step="1" aria-label="Точный наклон диска" @change="setOperationValue('bevel_angle', $event)"><b>°</b></span>
                     </div>
                 </div>
+                <div class="scene-angle-editor">
+                    <label for="scene-cut-depth">Глубина пропила</label>
+                    <div>
+                        <input id="scene-cut-depth" :value="selectedOperation.cut_depth" type="range" min="0.1" :max="props.activePart.dimensions.thickness" step="0.1" @input="setOperationValue('cut_depth', $event)">
+                        <span><input :value="selectedOperation.cut_depth" type="number" min="0.1" :max="props.activePart.dimensions.thickness" step="0.1" aria-label="Точная глубина пропила" @change="setOperationValue('cut_depth', $event)"><b>мм</b></span>
+                    </div>
+                </div>
+                <label class="scene-cut-direction">
+                    <span>Направление пропила</span>
+                    <select :value="selectedOperation.cut_direction" @change="setOperationDirection">
+                        <option value="top_down">Сверху вниз</option>
+                        <option value="bottom_up">Снизу вверх</option>
+                    </select>
+                </label>
                 <p>Shift+A — закрыть · Shift + ←/→ — план · Alt + ←/→ — наклон</p>
             </div>
         </div>
         <div v-if="selectedOperation" class="offcut-legend"><i></i> Полупрозрачная часть будет удалена</div>
+        <div v-if="transformState" class="scene-transform-hud">
+            <div>
+                <strong>{{ transformModeLabel }}</strong>
+                <span v-if="transformState.axis" class="transform-axis-badge" :class="`transform-axis-${transformState.axis}`">{{ transformState.axis.toUpperCase() }}</span>
+            </div>
+            <p v-if="!transformState.axis">Выберите ось: <kbd>X</kbd> <kbd>Y</kbd> <kbd>Z</kbd></p>
+            <p v-else>Двигайте мышь · <b>{{ transformValueLabel }}</b></p>
+            <small>ЛКМ / Enter — применить · Esc / ПКМ — отменить · Shift — точно</small>
+        </div>
         <div class="viewport-hint">СКМ / Alt+ЛКМ — вращение · Колесо — масштаб · ПКМ — перемещение</div>
         <div class="axis-widget" aria-hidden="true"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
     </div>
@@ -61,15 +90,32 @@ const props = defineProps({
     selectedOperationId: { type: String, default: null },
 });
 
-const emit = defineEmits(['select-instance', 'select-operation', 'update-operation']);
+const emit = defineEmits(['select-instance', 'select-operation', 'update-operation', 'commit-instance-transform']);
 const viewport = ref(null);
 const operationControls = ref(null);
 const anglePanelOpen = ref(false);
 const hoveredOperationId = ref(null);
+const operationToolHovered = ref(false);
+const transformState = ref(null);
 const millimeterScale = 0.01;
+const editorAxisDirections = {
+    x: new THREE.Vector3(1, 0, 0),
+    y: new THREE.Vector3(0, 0, 1),
+    z: new THREE.Vector3(0, 1, 0),
+};
+const editorToSceneBasis = new THREE.Matrix4().set(
+    1, 0, 0, 0,
+    0, 0, 1, 0,
+    0, 1, 0, 0,
+    0, 0, 0, 1,
+);
+const editorRotationEuler = new THREE.Euler(0, 0, 0, 'ZYX');
+const editorRotationMatrix = new THREE.Matrix4();
+const sceneRotationMatrix = new THREE.Matrix4();
 const palette = ['#b98552', '#c99b65', '#a87345', '#d0a878', '#98704c'];
 const objectMeshes = [];
 const operationHelpers = [];
+const lastPointerPosition = new THREE.Vector2();
 let animationFrame;
 let camera;
 let controls;
@@ -78,15 +124,55 @@ let resizeObserver;
 let scene;
 let objectsGroup;
 let dragState = null;
+let hoverClearTimer = null;
+let transformGuide = null;
+let hasPointerPosition = false;
 
 const selectedOperation = computed(() => props.activePart?.operations?.find((operation) => operation.id === props.selectedOperationId) ?? null);
 const angleCapableOperation = computed(() => ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type));
-const operationToolVisible = computed(() => anglePanelOpen.value || hoveredOperationId.value === props.selectedOperationId);
+const operationToolVisible = computed(() => anglePanelOpen.value || operationToolHovered.value || hoveredOperationId.value === props.selectedOperationId);
 const selectedOperationLabel = computed(() => ({
     cross_cut: 'Поперечный рез',
     rip_cut: 'Продольный рез',
     groove: 'Паз пилой',
 }[selectedOperation.value?.type] ?? 'Операция'));
+const selectedInstanceData = computed(() => {
+    for (const part of props.parts) {
+        const instance = part.instances?.find((item) => item.id === props.selectedInstanceId);
+
+        if (instance) return { part, instance };
+    }
+
+    return null;
+});
+
+const applyInstanceTransform = (mesh, part, position, rotation) => {
+    mesh.position.set(
+        Number(position.x) * millimeterScale,
+        Number(position.z) * millimeterScale + Number(part.dimensions.thickness) * millimeterScale / 2,
+        Number(position.y) * millimeterScale,
+    );
+
+    editorRotationEuler.set(
+        THREE.MathUtils.degToRad(Number(rotation.x)),
+        THREE.MathUtils.degToRad(Number(rotation.y)),
+        THREE.MathUtils.degToRad(Number(rotation.z)),
+    );
+    editorRotationMatrix.makeRotationFromEuler(editorRotationEuler);
+    sceneRotationMatrix
+        .copy(editorToSceneBasis)
+        .multiply(editorRotationMatrix)
+        .multiply(editorToSceneBasis);
+    mesh.quaternion.setFromRotationMatrix(sceneRotationMatrix);
+};
+const transformModeLabel = computed(() => transformState.value?.mode === 'move' ? 'Перемещение' : 'Вращение');
+const transformValueLabel = computed(() => {
+    if (!transformState.value?.axis) return '';
+
+    return transformState.value.mode === 'move'
+        ? `${transformState.value.value.toFixed(1)} мм`
+        : `${transformState.value.value.toFixed(1)}°`;
+});
 
 const emptyMessage = computed(() => {
     if (props.mode === 'part' && !props.activePart) {
@@ -120,7 +206,7 @@ const halfSpaceCutter = (part, point, normal, kerf = 0) => {
     return brush;
 };
 
-const crossCutCutter = (part, operation) => {
+const crossCutPlane = (part, operation) => {
     const { length } = partSize(part);
     const miter = THREE.MathUtils.degToRad(Number(operation.miter_angle));
     const bevel = THREE.MathUtils.degToRad(Number(operation.bevel_angle));
@@ -129,12 +215,49 @@ const crossCutCutter = (part, operation) => {
         Math.sin(bevel),
         Math.cos(bevel) * Math.sin(miter),
     ).normalize();
+    const point = new THREE.Vector3(-length / 2 + Number(operation.position) * millimeterScale, 0, 0);
+
+    return { point, normal };
+};
+
+const isPartialDepthCut = (part, operation) => Number(operation.cut_depth ?? part.dimensions.thickness) < Number(part.dimensions.thickness) - 0.01;
+
+const depthLimitedKerfCutter = (part, operation, point, normal) => {
+    const { length, width, thickness } = partSize(part);
+    const extent = Math.max(length, width, thickness) * 6 + 20;
+    const kerf = Math.max(Number(operation.kerf) * millimeterScale, 0.001);
+    const depth = Math.min(Number(operation.cut_depth) * millimeterScale, thickness);
+    const epsilon = 0.004;
+    const blade = new Brush(new THREE.BoxGeometry(kerf, extent, extent));
+    blade.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), normal.clone().normalize());
+    blade.position.copy(point);
+    blade.updateMatrixWorld();
+
+    const depthBand = new Brush(new THREE.BoxGeometry(extent, depth + epsilon, extent));
+    depthBand.position.y = operation.cut_direction === 'bottom_up'
+        ? -thickness / 2 + depth / 2 - epsilon / 2
+        : thickness / 2 - depth / 2 + epsilon / 2;
+    depthBand.updateMatrixWorld();
+
+    const evaluator = new Evaluator();
+    evaluator.useGroups = false;
+    const cutter = evaluator.evaluate(blade, depthBand, INTERSECTION);
+    blade.geometry.dispose();
+    depthBand.geometry.dispose();
+
+    return cutter;
+};
+
+const crossCutCutter = (part, operation) => {
+    const { point, normal } = crossCutPlane(part, operation);
+
+    if (isPartialDepthCut(part, operation)) {
+        return depthLimitedKerfCutter(part, operation, point, normal);
+    }
 
     if (operation.keep_side === 'end') {
         normal.negate();
     }
-
-    const point = new THREE.Vector3(-length / 2 + Number(operation.position) * millimeterScale, 0, 0);
 
     return halfSpaceCutter(part, point, normal, operation.kerf);
 };
@@ -160,6 +283,10 @@ const ripCutPlane = (part, operation) => {
 
 const ripCutCutter = (part, operation) => {
     const { point, normal } = ripCutPlane(part, operation);
+
+    if (isPartialDepthCut(part, operation)) {
+        return depthLimitedKerfCutter(part, operation, point, normal);
+    }
 
     if (operation.keep_side === 'reference') {
         normal.negate();
@@ -321,19 +448,11 @@ const createOperationPreview = (part, operation) => {
         const { length, width, thickness } = partSize(part);
         const extent = Math.max(length, width, thickness) * 1.4;
         const plane = operation.type === 'cross_cut'
-            ? { cutter: crossCutCutter(part, operation) }
+            ? crossCutPlane(part, operation)
             : { ...ripCutPlane(part, operation) };
         preview = new THREE.Mesh(new THREE.BoxGeometry(0.012, extent, extent));
-
-        if (plane.cutter) {
-            preview.quaternion.copy(plane.cutter.quaternion);
-            const normal = new THREE.Vector3(1, 0, 0).applyQuaternion(preview.quaternion);
-            preview.position.copy(plane.cutter.position).addScaledVector(normal, -Math.max(length, width, thickness) * 3 - 10);
-            plane.cutter.geometry.dispose();
-        } else {
-            preview.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), plane.normal);
-            preview.position.copy(plane.point);
-        }
+        preview.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), plane.normal);
+        preview.position.copy(plane.point);
     }
 
     const isSelected = operation.id === props.selectedOperationId;
@@ -353,7 +472,11 @@ const createOperationPreview = (part, operation) => {
 };
 
 const createOperationPreviews = (part) => {
-    (part.operations ?? []).forEach((operation) => createOperationPreview(part, operation));
+    const selectedOperation = part.operations?.find((operation) => operation.id === props.selectedOperationId);
+
+    if (selectedOperation) {
+        createOperationPreview(part, selectedOperation);
+    }
 };
 
 const clearObjects = () => {
@@ -389,16 +512,7 @@ const createMesh = (part, instance = null) => {
     mesh.add(edges);
 
     if (instance) {
-        mesh.position.set(
-            Number(instance.position.x) * millimeterScale,
-            Number(instance.position.y) * millimeterScale + Number(part.dimensions.thickness) * millimeterScale / 2,
-            Number(instance.position.z) * millimeterScale,
-        );
-        mesh.rotation.set(
-            THREE.MathUtils.degToRad(Number(instance.rotation.x)),
-            THREE.MathUtils.degToRad(Number(instance.rotation.y)),
-            THREE.MathUtils.degToRad(Number(instance.rotation.z)),
-        );
+        applyInstanceTransform(mesh, part, instance.position, instance.rotation);
         mesh.scale.x = instance.mirrored ? -1 : 1;
     } else {
         mesh.position.y = Number(part.dimensions.thickness) * millimeterScale / 2;
@@ -441,8 +555,201 @@ const rayFromEvent = (event) => {
 };
 
 const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
+const preventContextMenu = (event) => event.preventDefault();
+
+const selectedInstanceMesh = () => objectMeshes.find((mesh) => mesh.userData.instanceId === props.selectedInstanceId) ?? null;
+
+const clearTransformGuide = () => {
+    if (!transformGuide) return;
+
+    transformGuide.geometry.dispose();
+    transformGuide.material.dispose();
+    objectsGroup.remove(transformGuide);
+    transformGuide = null;
+};
+
+const showTransformGuide = (axis) => {
+    clearTransformGuide();
+    const mesh = selectedInstanceMesh();
+
+    if (!mesh) return;
+
+    const direction = editorAxisDirections[axis];
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+        direction.clone().multiplyScalar(-100),
+        direction.clone().multiplyScalar(100),
+    ]);
+    const material = new THREE.LineDashedMaterial({
+        color: { x: '#d34b45', y: '#3b9560', z: '#467bc2' }[axis],
+        dashSize: 0.22,
+        gapSize: 0.12,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+    });
+    transformGuide = new THREE.Line(geometry, material);
+    transformGuide.computeLineDistances();
+    transformGuide.position.copy(mesh.position);
+    transformGuide.renderOrder = 5;
+    objectsGroup.add(transformGuide);
+};
+
+const applyTransformPreview = (value) => {
+    const state = transformState.value;
+    const data = selectedInstanceData.value;
+    const mesh = selectedInstanceMesh();
+
+    if (!state || !state.axis || !data || !mesh) return;
+
+    const position = { ...state.initialPosition };
+    const rotation = { ...state.initialRotation };
+
+    if (state.mode === 'move') {
+        position[state.axis] += value;
+    } else {
+        rotation[state.axis] += value;
+    }
+
+    applyInstanceTransform(mesh, data.part, position, rotation);
+    state.position = position;
+    state.rotation = rotation;
+    state.value = value;
+
+    if (transformGuide) {
+        transformGuide.position.copy(mesh.position);
+    }
+};
+
+const beginTransform = (mode) => {
+    const data = selectedInstanceData.value;
+    const mesh = selectedInstanceMesh();
+
+    if (!data || !mesh || props.mode !== 'assembly') return;
+
+    if (transformState.value) {
+        applyTransformPreview(0);
+        clearTransformGuide();
+    }
+
+    if (!hasPointerPosition) {
+        const bounds = renderer.domElement.getBoundingClientRect();
+        lastPointerPosition.set(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+    }
+
+    const initialWorldPosition = mesh.getWorldPosition(new THREE.Vector3());
+
+    transformState.value = {
+        mode,
+        axis: null,
+        instanceId: data.instance.id,
+        initialPosition: { ...data.instance.position },
+        initialRotation: { ...data.instance.rotation },
+        position: { ...data.instance.position },
+        rotation: { ...data.instance.rotation },
+        initialWorldPosition: { x: initialWorldPosition.x, y: initialWorldPosition.y, z: initialWorldPosition.z },
+        value: 0,
+        startPointer: { x: lastPointerPosition.x, y: lastPointerPosition.y },
+    };
+    controls.enabled = false;
+    renderer.domElement.style.cursor = 'crosshair';
+};
+
+const selectTransformAxis = (axis) => {
+    if (!transformState.value) return;
+
+    transformState.value.axis = axis;
+    transformState.value.startPointer = { x: lastPointerPosition.x, y: lastPointerPosition.y };
+    applyTransformPreview(0);
+    showTransformGuide(axis);
+};
+
+const moveValueFromPointer = (event) => {
+    const state = transformState.value;
+    const mesh = selectedInstanceMesh();
+
+    if (!state?.axis || !mesh) return 0;
+
+    const bounds = renderer.domElement.getBoundingClientRect();
+    const axisVector = editorAxisDirections[state.axis];
+    const worldPosition = new THREE.Vector3(
+        state.initialWorldPosition.x,
+        state.initialWorldPosition.y,
+        state.initialWorldPosition.z,
+    );
+    const projectedStart = worldPosition.clone().project(camera);
+    const projectedEnd = worldPosition.clone().add(axisVector).project(camera);
+    const screenAxis = new THREE.Vector2(
+        (projectedEnd.x - projectedStart.x) * bounds.width / 2,
+        -(projectedEnd.y - projectedStart.y) * bounds.height / 2,
+    );
+
+    if (screenAxis.lengthSq() < 0.0001) {
+        screenAxis.set(1, 0);
+    } else {
+        screenAxis.normalize();
+    }
+
+    const pointerDelta = new THREE.Vector2(
+        event.clientX - state.startPointer.x,
+        event.clientY - state.startPointer.y,
+    );
+    const distance = camera.position.distanceTo(worldPosition);
+    const worldPerPixel = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / Math.max(bounds.height, 1);
+    const precision = event.shiftKey ? 0.1 : 1;
+
+    return Math.round(pointerDelta.dot(screenAxis) * worldPerPixel / millimeterScale * precision * 10) / 10;
+};
+
+const rotationValueFromPointer = (event) => {
+    const state = transformState.value;
+
+    if (!state) return 0;
+
+    const horizontal = event.clientX - state.startPointer.x;
+    const vertical = state.startPointer.y - event.clientY;
+    const precision = event.shiftKey ? 0.1 : 1;
+
+    return Math.round((horizontal + vertical) * 0.35 * precision * 10) / 10;
+};
+
+const finishTransform = (shouldCommit) => {
+    const state = transformState.value;
+
+    if (!state) return;
+
+    if (shouldCommit && state.axis) {
+        emit('commit-instance-transform', {
+            instanceId: state.instanceId,
+            position: state.position,
+            rotation: state.rotation,
+            initialPosition: state.initialPosition,
+            initialRotation: state.initialRotation,
+        });
+    } else {
+        applyTransformPreview(0);
+    }
+
+    transformState.value = null;
+    clearTransformGuide();
+    controls.enabled = true;
+    renderer.domElement.style.cursor = '';
+};
 
 const pointerDown = (event) => {
+    lastPointerPosition.set(event.clientX, event.clientY);
+    hasPointerPosition = true;
+
+    if (props.mode === 'assembly' && transformState.value) {
+        if (event.button === 0) {
+            finishTransform(true);
+        } else if (event.button === 2) {
+            finishTransform(false);
+        }
+
+        event.preventDefault();
+        return;
+    }
+
     const raycaster = rayFromEvent(event);
     const isAltRotate = event.button === 0 && event.altKey;
 
@@ -492,11 +799,58 @@ const pointerDown = (event) => {
     emit('select-instance', intersection?.object.userData.instanceId ?? null);
 };
 
+const cancelOperationToolHide = () => {
+    if (hoverClearTimer !== null) {
+        window.clearTimeout(hoverClearTimer);
+        hoverClearTimer = null;
+    }
+};
+
+const scheduleOperationToolHide = () => {
+    if (anglePanelOpen.value || operationToolHovered.value || hoverClearTimer !== null) return;
+
+    hoverClearTimer = window.setTimeout(() => {
+        hoveredOperationId.value = null;
+        hoverClearTimer = null;
+    }, 220);
+};
+
+const keepOperationToolVisible = () => {
+    operationToolHovered.value = true;
+    cancelOperationToolHide();
+};
+
+const releaseOperationTool = () => {
+    operationToolHovered.value = false;
+    scheduleOperationToolHide();
+};
+
 const pointerMove = (event) => {
+    lastPointerPosition.set(event.clientX, event.clientY);
+    hasPointerPosition = true;
+
+    if (props.mode === 'assembly' && transformState.value) {
+        if (transformState.value.axis) {
+            const value = transformState.value.mode === 'move'
+                ? moveValueFromPointer(event)
+                : rotationValueFromPointer(event);
+            applyTransformPreview(value);
+        }
+
+        return;
+    }
+
     if (!dragState) {
         if (props.mode === 'part') {
             const hoveredHelper = rayFromEvent(event).intersectObjects(operationHelpers, false)[0]?.object;
-            hoveredOperationId.value = hoveredHelper?.userData.operationId ?? null;
+
+            if (hoveredHelper) {
+                cancelOperationToolHide();
+                hoveredOperationId.value = hoveredHelper.userData.operationId;
+            } else {
+                scheduleOperationToolHide();
+            }
+
             renderer.domElement.style.cursor = hoveredHelper ? 'grab' : '';
         }
 
@@ -581,8 +935,18 @@ const positionOperationControls = () => {
     const position = projectedCorners.reduce((best, corner) => corner.x + corner.y > best.x + best.y ? corner : best);
     const controlWidth = operationControls.value.offsetWidth || (anglePanelOpen.value ? 252 : 38);
     const controlHeight = operationControls.value.offsetHeight || (anglePanelOpen.value ? 190 : 38);
-    const x = clamp((position.x + 1) / 2 * clientWidth + 8, 12, Math.max(clientWidth - controlWidth - 12, 12));
-    const y = clamp((-position.y + 1) / 2 * clientHeight - controlHeight - 8, 54, Math.max(clientHeight - controlHeight - 36, 54));
+
+    if (anglePanelOpen.value) {
+        operationControls.value.style.display = '';
+        operationControls.value.style.left = `${Math.max(clientWidth - controlWidth - 16, 12)}px`;
+        operationControls.value.style.top = '54px';
+        return;
+    }
+
+    const cornerX = (position.x + 1) / 2 * clientWidth;
+    const cornerY = (-position.y + 1) / 2 * clientHeight;
+    const x = clamp(cornerX - controlWidth - 6, 12, Math.max(clientWidth - controlWidth - 12, 12));
+    const y = clamp(cornerY + 6, 54, Math.max(clientHeight - controlHeight - 36, 54));
     operationControls.value.style.display = '';
     operationControls.value.style.left = `${x}px`;
     operationControls.value.style.top = `${y}px`;
@@ -604,13 +968,68 @@ const setOperationValue = (field, event) => {
 
     if (!Number.isFinite(value)) return;
 
+    if (field === 'cut_depth') {
+        emit('update-operation', selectedOperation.value.id, {
+            cut_depth: clamp(value, 0.1, Number(props.activePart.dimensions.thickness)),
+        });
+        return;
+    }
+
     const limit = field === 'miter_angle' ? 60 : 45;
     emit('update-operation', selectedOperation.value.id, { [field]: clamp(value, -limit, limit) });
 };
 
+const setOperationDirection = (event) => {
+    if (!selectedOperation.value) return;
+
+    emit('update-operation', selectedOperation.value.id, { cut_direction: event.target.value });
+};
+
+const handleAssemblyTransformKey = (event) => {
+    const key = event.key.toLowerCase();
+
+    if (!transformState.value) {
+        if (key === 'g' || key === 'r') {
+            beginTransform(key === 'g' ? 'move' : 'rotate');
+            event.preventDefault();
+        }
+
+        return;
+    }
+
+    if (event.key === 'Escape') {
+        finishTransform(false);
+        event.preventDefault();
+        return;
+    }
+
+    if (event.key === 'Enter') {
+        finishTransform(true);
+        event.preventDefault();
+        return;
+    }
+
+    if (['g', 'r'].includes(key)) {
+        beginTransform(key === 'g' ? 'move' : 'rotate');
+        event.preventDefault();
+        return;
+    }
+
+    if (['x', 'y', 'z'].includes(key)) {
+        selectTransformAxis(key);
+        event.preventDefault();
+    }
+};
+
 const keyDown = (event) => {
-    if (props.mode !== 'part' || !selectedOperation.value) return;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+
+    if (props.mode === 'assembly') {
+        handleAssemblyTransformKey(event);
+        return;
+    }
+
+    if (props.mode !== 'part' || !selectedOperation.value) return;
 
     if (event.shiftKey && event.key.toLowerCase() === 'a' && angleCapableOperation.value) {
         anglePanelOpen.value = !anglePanelOpen.value;
@@ -648,6 +1067,7 @@ onMounted(() => {
     renderer.domElement.addEventListener('pointermove', pointerMove);
     renderer.domElement.addEventListener('pointerup', pointerUp);
     renderer.domElement.addEventListener('pointercancel', pointerUp);
+    renderer.domElement.addEventListener('contextmenu', preventContextMenu);
     window.addEventListener('keydown', keyDown);
     container.prepend(renderer.domElement);
 
@@ -687,16 +1107,24 @@ onMounted(() => {
 });
 
 watch(() => [props.mode, props.parts, props.activePart, props.selectedInstanceId, props.selectedOperationId], rebuildObjects, { deep: true });
-watch(() => props.selectedOperationId, () => { anglePanelOpen.value = false; });
+watch(() => props.selectedOperationId, () => {
+    anglePanelOpen.value = false;
+    hoveredOperationId.value = null;
+    operationToolHovered.value = false;
+    cancelOperationToolHide();
+});
 
 onBeforeUnmount(() => {
     cancelAnimationFrame(animationFrame);
     resizeObserver?.disconnect();
+    finishTransform(false);
     renderer?.domElement.removeEventListener('pointerdown', pointerDown);
     renderer?.domElement.removeEventListener('pointermove', pointerMove);
     renderer?.domElement.removeEventListener('pointerup', pointerUp);
     renderer?.domElement.removeEventListener('pointercancel', pointerUp);
+    renderer?.domElement.removeEventListener('contextmenu', preventContextMenu);
     window.removeEventListener('keydown', keyDown);
+    cancelOperationToolHide();
     clearObjects();
     renderer?.dispose();
 });

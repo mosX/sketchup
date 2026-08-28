@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { readFileSync } from 'node:fs';
 import laravel from 'laravel-vite-plugin';
 import { bunny } from 'laravel-vite-plugin/fonts';
 import tailwindcss from '@tailwindcss/vite';
@@ -19,6 +20,15 @@ export default defineConfig({
         tailwindcss(),
     ],
     server: {
+        host: 'sketchup',
+        https: {
+            key: readFileSync(new URL('../../data/ssl/projects/sketchup/cert.key', import.meta.url)),
+            cert: readFileSync(new URL('../../data/ssl/projects/sketchup/cert.crt', import.meta.url)),
+        },
+        hmr: {
+            host: 'sketchup',
+            protocol: 'wss',
+        },
         watch: {
             ignored: ['**/storage/framework/views/**'],
         },

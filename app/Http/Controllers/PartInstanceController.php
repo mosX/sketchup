@@ -23,15 +23,16 @@ class PartInstanceController extends Controller
 
         $instances = DB::transaction(function () use ($partDefinition, $project, $quantity, $validated) {
             return collect(range(0, $quantity - 1))->map(function (int $index) use ($partDefinition, $project, $validated) {
-                $positionZ = (float) ($validated['position_z'] ?? 0) + ($index * ($partDefinition->width + 100));
+                $positionY = (float) ($validated['position_y'] ?? 0) + ($index * ($partDefinition->width + 100));
 
                 return $partDefinition->instances()->create([
                     ...$validated,
                     'project_id' => $project->id,
-                    'position_z' => $positionZ,
+                    'position_y' => $positionY,
                 ]);
             });
         });
+        $project->increment('revision');
 
         return PartInstanceResource::collection($instances)
             ->response()
@@ -41,6 +42,7 @@ class PartInstanceController extends Controller
     public function update(UpdatePartInstanceRequest $request, Project $project, PartInstance $partInstance): PartInstanceResource
     {
         $partInstance->update($request->validated());
+        $project->increment('revision');
 
         return new PartInstanceResource($partInstance->refresh());
     }
@@ -49,6 +51,7 @@ class PartInstanceController extends Controller
     {
         Gate::authorize('update', $project);
         $partInstance->delete();
+        $project->increment('revision');
 
         return response()->noContent();
     }

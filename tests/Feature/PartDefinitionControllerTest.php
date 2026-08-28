@@ -40,11 +40,14 @@ class PartDefinitionControllerTest extends TestCase
                 [
                     'id' => 'cross-1',
                     'type' => 'cross_cut',
+                    'status' => 'applied',
                     'enabled' => true,
                     'position' => 700,
                     'miter_angle' => 12,
                     'bevel_angle' => 8,
                     'kerf' => 3.2,
+                    'cut_depth' => 24,
+                    'cut_direction' => 'top_down',
                     'keep_side' => 'start',
                 ],
                 [
@@ -67,7 +70,10 @@ class PartDefinitionControllerTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('data.name', 'Ножка стола')
             ->assertJsonPath('data.dimensions.length', 720)
+            ->assertJsonPath('data.operations.0.status', 'applied')
             ->assertJsonPath('data.operations.0.miter_angle', 12)
+            ->assertJsonPath('data.operations.0.cut_depth', 24)
+            ->assertJsonPath('data.operations.0.cut_direction', 'top_down')
             ->assertJsonPath('data.operations.1.depth', 12);
 
         $this->assertDatabaseHas('part_definitions', [
@@ -97,6 +103,62 @@ class PartDefinitionControllerTest extends TestCase
                 'keep_side' => 'start',
             ]],
         ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.position');
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_invalid_operation_status_does_not_create_part_definition(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Панель',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'cross_cut',
+                'status' => 'finished',
+                'position' => 580,
+                'miter_angle' => 0,
+                'bevel_angle' => 0,
+                'kerf' => 3.2,
+                'keep_side' => 'start',
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.status');
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_cut_depth_and_direction_must_match_the_part(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Панель',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'cross_cut',
+                'position' => 580,
+                'miter_angle' => 0,
+                'bevel_angle' => 0,
+                'kerf' => 3.2,
+                'cut_depth' => 20,
+                'cut_direction' => 'left_to_right',
+                'keep_side' => 'start',
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.cut_depth',
+            'operations.0.cut_direction',
+        ]);
 
         $this->assertDatabaseCount('part_definitions', 0);
     }

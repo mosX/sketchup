@@ -32,6 +32,7 @@ class PartDefinitionController extends Controller
     public function store(StorePartDefinitionRequest $request, Project $project): JsonResponse
     {
         $partDefinition = $project->partDefinitions()->create($request->validated());
+        $project->increment('revision');
 
         return (new PartDefinitionResource($partDefinition->load('instances')->loadCount('instances')))
             ->response()
@@ -54,6 +55,7 @@ class PartDefinitionController extends Controller
     public function update(UpdatePartDefinitionRequest $request, Project $project, PartDefinition $partDefinition): PartDefinitionResource
     {
         $partDefinition->update($request->validated());
+        $project->increment('revision');
 
         return new PartDefinitionResource($partDefinition->refresh()->load('instances')->loadCount('instances'));
     }
@@ -65,6 +67,7 @@ class PartDefinitionController extends Controller
     {
         Gate::authorize('update', $project);
         $partDefinition->delete();
+        $project->increment('revision');
 
         return response()->noContent();
     }

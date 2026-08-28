@@ -19,6 +19,13 @@ class ProjectResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'scene_data' => $this->scene_data,
+            'revision' => $this->revision,
+            'coordinate_system' => [
+                'units' => 'millimeters',
+                'angles' => 'degrees',
+                'up_axis' => 'z',
+            ],
+            'parts' => PartDefinitionResource::collection($this->whenLoaded('partDefinitions')),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

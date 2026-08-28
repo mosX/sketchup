@@ -26,6 +26,7 @@ class ProjectFactory extends Factory
                 'version' => 1,
                 'objects' => [],
             ],
+            'revision' => 1,
         ];
     }
 }

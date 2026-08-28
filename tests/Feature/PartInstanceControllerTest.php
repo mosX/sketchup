@@ -31,7 +31,8 @@ class PartInstanceControllerTest extends TestCase
             ->assertCreated()
             ->assertJsonCount(4, 'data')
             ->assertJsonPath('data.0.position.z', 50)
-            ->assertJsonPath('data.1.position.z', 210)
+            ->assertJsonPath('data.1.position.y', 160)
+            ->assertJsonPath('data.1.position.z', 50)
             ->assertJsonPath('data.3.part_definition_id', $partDefinition->id);
 
         $this->assertDatabaseCount('part_instances', 4);

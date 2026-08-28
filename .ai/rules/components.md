@@ -13,3 +13,9 @@ Do not bind plain left-drag to camera rotation. Rotate with middle-button drag o
 
 ## Show angle editor on demand at the cut plane
 The angle editor stays closed until requested. Show its compact trigger only while hovering the active cut plane, anchor it to the plane's screen-space upper-right corner, and keep Shift+A as the keyboard toggle.
+
+## Keep the hover-only angle trigger reachable
+Anchor the angle trigger just inside the plane's projected upper-right corner. Use a short delayed hover release and keep it visible while the pointer is over the trigger or menu, so crossing from the WebGL canvas to the HTML control cannot make it disappear.
+
+## Keep the open cut editor stationary
+The closed trigger follows the selected cut plane, but once opened the cut editor must stay fixed at the viewport's upper-right corner. Do not project the open panel from changing geometry; angle and depth sliders must remain stationary while CSG previews rebuild.

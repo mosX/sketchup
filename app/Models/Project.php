@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'description', 'scene_data'])]
+#[Fillable(['name', 'description', 'scene_data', 'revision'])]
 class Project extends Model
 {
     /** @use HasFactory<ProjectFactory> */
@@ -18,6 +18,7 @@ class Project extends Model
     /** @var array<string, mixed> */
     protected $attributes = [
         'scene_data' => '{"version":1,"objects":[]}',
+        'revision' => 1,
     ];
 
     /**
@@ -27,6 +28,7 @@ class Project extends Model
     {
         return [
             'scene_data' => 'array',
+            'revision' => 'integer',
         ];
     }
 
