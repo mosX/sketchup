@@ -26,6 +26,7 @@ class ProjectResource extends JsonResource
                 'up_axis' => 'z',
             ],
             'parts' => PartDefinitionResource::collection($this->whenLoaded('partDefinitions')),
+            'assembly_groups' => AssemblyGroupResource::collection($this->whenLoaded('assemblyGroups')),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

@@ -229,6 +229,352 @@ class PartDefinitionControllerTest extends TestCase
         ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.depth');
     }
 
+    public function test_valid_surface_groove_can_be_created_on_a_side_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Side grooved panel',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'groove',
+                'face' => 'right',
+                'center_u' => 300,
+                'center_v' => 9,
+                'path_angle' => 0,
+                'groove_length' => 240,
+                'width' => 4,
+                'depth' => 12,
+                'blade_diameter' => 190,
+            ]],
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.operations.0.face', 'right')
+            ->assertJsonPath('data.operations.0.center_u', 300)
+            ->assertJsonPath('data.operations.0.groove_length', 240)
+            ->assertJsonPath('data.operations.0.depth', 12);
+
+        $this->assertDatabaseHas('part_definitions', [
+            'project_id' => $project->id,
+            'name' => 'Side grooved panel',
+        ]);
+    }
+
+    public function test_surface_groove_returns_422_when_it_exceeds_the_selected_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid side groove',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'groove',
+                'face' => 'right',
+                'center_u' => 590,
+                'center_v' => 9,
+                'path_angle' => 0,
+                'groove_length' => 100,
+                'width' => 4,
+                'depth' => 301,
+                'blade_diameter' => 190,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.center_u',
+            'operations.0.depth',
+        ]);
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_valid_edge_roundover_can_be_created(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Rounded shelf',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'edge_roundover',
+                'edge' => 'top_left',
+                'radius' => 6,
+            ]],
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.operations.0.type', 'edge_roundover')
+            ->assertJsonPath('data.operations.0.edge', 'top_left')
+            ->assertJsonPath('data.operations.0.radius', 6);
+
+        $this->assertDatabaseHas('part_definitions', [
+            'project_id' => $project->id,
+            'name' => 'Rounded shelf',
+        ]);
+    }
+
+    public function test_edge_roundover_returns_422_when_radius_exceeds_edge_limit(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid rounded shelf',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'edge_roundover',
+                'edge' => 'top_left',
+                'radius' => 10,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.radius');
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_valid_plunge_router_path_can_be_created_on_a_side_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Mortised rail',
+            'length' => 600,
+            'width' => 80,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'plunge_route',
+                'face' => 'left',
+                'route_mode' => 'path',
+                'start_u' => 120,
+                'start_v' => 15,
+                'path_angle' => 0,
+                'travel_length' => 240,
+                'cutter_diameter' => 16,
+                'cutter_profile' => 'dovetail',
+                'cutter_angle' => 14,
+                'depth' => 20,
+            ]],
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.operations.0.type', 'plunge_route')
+            ->assertJsonPath('data.operations.0.route_mode', 'path')
+            ->assertJsonPath('data.operations.0.face', 'left')
+            ->assertJsonPath('data.operations.0.travel_length', 240)
+            ->assertJsonPath('data.operations.0.cutter_diameter', 16)
+            ->assertJsonPath('data.operations.0.cutter_profile', 'dovetail')
+            ->assertJsonPath('data.operations.0.cutter_angle', 14)
+            ->assertJsonPath('data.operations.0.depth', 20);
+    }
+
+    public function test_plunge_router_returns_422_when_path_or_depth_exceeds_the_selected_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid mortise',
+            'length' => 600,
+            'width' => 80,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'plunge_route',
+                'face' => 'left',
+                'route_mode' => 'path',
+                'start_u' => 570,
+                'start_v' => 15,
+                'path_angle' => 0,
+                'travel_length' => 50,
+                'cutter_diameter' => 12,
+                'cutter_profile' => 'straight',
+                'cutter_angle' => 0,
+                'depth' => 90,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.start_u',
+            'operations.0.depth',
+        ]);
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_point_plunge_requires_zero_travel_length(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid plunge',
+            'length' => 600,
+            'width' => 80,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'plunge_route',
+                'face' => 'top',
+                'route_mode' => 'point',
+                'start_u' => 300,
+                'start_v' => 40,
+                'path_angle' => 0,
+                'travel_length' => 20,
+                'cutter_diameter' => 8,
+                'cutter_profile' => 'straight',
+                'cutter_angle' => 0,
+                'depth' => 10,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.travel_length');
+    }
+
+    public function test_valid_v_groove_plunge_can_be_created(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'V grooved panel',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 18,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'plunge_route',
+                'face' => 'top',
+                'route_mode' => 'path',
+                'start_u' => 100,
+                'start_v' => 150,
+                'path_angle' => 0,
+                'travel_length' => 300,
+                'cutter_diameter' => 20,
+                'cutter_profile' => 'v_groove',
+                'cutter_angle' => 90,
+                'depth' => 8,
+            ]],
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.operations.0.cutter_profile', 'v_groove')
+            ->assertJsonPath('data.operations.0.cutter_angle', 90)
+            ->assertJsonPath('data.operations.0.depth', 8);
+    }
+
+    public function test_v_groove_plunge_returns_422_when_depth_exceeds_cutter_profile(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid V groove',
+            'length' => 600,
+            'width' => 300,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'plunge_route',
+                'face' => 'top',
+                'route_mode' => 'point',
+                'start_u' => 300,
+                'start_v' => 150,
+                'path_angle' => 0,
+                'travel_length' => 0,
+                'cutter_diameter' => 12,
+                'cutter_profile' => 'v_groove',
+                'cutter_angle' => 90,
+                'depth' => 10,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors('operations.0.depth');
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_valid_through_hole_can_be_created_on_a_side_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Drilled rail',
+            'length' => 600,
+            'width' => 80,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'drill',
+                'face' => 'left',
+                'center_u' => 300,
+                'center_v' => 15,
+                'diameter' => 8,
+                'depth' => 80,
+                'through' => true,
+            ]],
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.operations.0.type', 'drill')
+            ->assertJsonPath('data.operations.0.face', 'left')
+            ->assertJsonPath('data.operations.0.diameter', 8)
+            ->assertJsonPath('data.operations.0.through', true);
+    }
+
+    public function test_drill_returns_422_when_hole_or_depth_exceeds_the_selected_face(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid drilled rail',
+            'length' => 600,
+            'width' => 80,
+            'thickness' => 30,
+            'grain_axis' => 'length',
+            'operations' => [[
+                'type' => 'drill',
+                'face' => 'left',
+                'center_u' => 598,
+                'center_v' => 15,
+                'diameter' => 8,
+                'depth' => 81,
+                'through' => false,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.center_u',
+            'operations.0.depth',
+        ]);
+
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
     public function test_deleting_definition_removes_its_instances(): void
     {
         $user = User::factory()->create();

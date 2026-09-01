@@ -2,9 +2,11 @@
 
 namespace App\Http\Requests;
 
+use App\Models\AssemblyGroup;
 use App\Models\Project;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdatePartInstanceRequest extends FormRequest
 {
@@ -26,6 +28,12 @@ class UpdatePartInstanceRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'assembly_group_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::exists(AssemblyGroup::class, 'id')->where('project_id', $this->route('project')?->id),
+            ],
             'position_x' => ['sometimes', 'numeric', 'between:-100000,100000'],
             'position_y' => ['sometimes', 'numeric', 'between:-100000,100000'],
             'position_z' => ['sometimes', 'numeric', 'between:-100000,100000'],

@@ -46,4 +46,9 @@ class Project extends Model
     {
         return $this->hasMany(PartInstance::class);
     }
+
+    public function assemblyGroups(): HasMany
+    {
+        return $this->hasMany(AssemblyGroup::class);
+    }
 }

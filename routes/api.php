@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\CapabilityController;
 use App\Http\Controllers\Api\V1\ProjectCommandController;
 use App\Http\Controllers\Api\V1\ProjectSnapshotController;
 use App\Http\Controllers\Api\V1\ProjectValidationController;
+use App\Http\Controllers\AssemblyGroupController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PartDefinitionController;
 use App\Http\Controllers\PartInstanceController;
@@ -28,6 +29,9 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::post('/projects/{project}/parts/{partDefinition}/instances', [PartInstanceController::class, 'store']);
         Route::patch('/projects/{project}/instances/{partInstance}', [PartInstanceController::class, 'update']);
         Route::delete('/projects/{project}/instances/{partInstance}', [PartInstanceController::class, 'destroy']);
+        Route::apiResource('projects.assembly-groups', AssemblyGroupController::class)
+            ->parameters(['assembly-groups' => 'assemblyGroup'])
+            ->except('show');
     });
 });
 
@@ -68,6 +72,15 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
         Route::patch('/projects/{project}/instances/{partInstance}', [PartInstanceController::class, 'update'])
             ->middleware('abilities:projects:write');
         Route::delete('/projects/{project}/instances/{partInstance}', [PartInstanceController::class, 'destroy'])
+            ->middleware('abilities:projects:write');
+
+        Route::get('/projects/{project}/assembly-groups', [AssemblyGroupController::class, 'index'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::post('/projects/{project}/assembly-groups', [AssemblyGroupController::class, 'store'])
+            ->middleware('abilities:projects:write');
+        Route::patch('/projects/{project}/assembly-groups/{assemblyGroup}', [AssemblyGroupController::class, 'update'])
+            ->middleware('abilities:projects:write');
+        Route::delete('/projects/{project}/assembly-groups/{assemblyGroup}', [AssemblyGroupController::class, 'destroy'])
             ->middleware('abilities:projects:write');
 
         Route::post('/projects/{project}/commands', ProjectCommandController::class)

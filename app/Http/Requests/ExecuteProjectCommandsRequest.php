@@ -31,18 +31,26 @@ class ExecuteProjectCommandsRequest extends FormRequest
             'expected_revision' => ['required', 'integer', 'min:1'],
             'dry_run' => ['sometimes', 'boolean'],
             'commands' => ['required', 'array', 'min:1', 'max:100'],
-            'commands.*' => ['required', 'array:type,temporary_id,part_id,part_ref,instance_id,instance_ref,data'],
+            'commands.*' => ['required', 'array:type,temporary_id,part_id,part_ref,instance_id,instance_ref,group_id,group_ref,parent_group_id,parent_group_ref,data'],
             'commands.*.type' => ['required', 'string', Rule::in([
                 'create_part',
                 'create_instance',
                 'transform_instance',
                 'delete_instance',
+                'create_group',
+                'update_group',
+                'delete_group',
+                'assign_instance_to_group',
             ])],
             'commands.*.temporary_id' => ['sometimes', 'string', 'max:100', 'distinct'],
             'commands.*.part_id' => ['sometimes', 'integer'],
             'commands.*.part_ref' => ['sometimes', 'string', 'max:100'],
             'commands.*.instance_id' => ['sometimes', 'integer'],
             'commands.*.instance_ref' => ['sometimes', 'string', 'max:100'],
+            'commands.*.group_id' => ['sometimes', 'integer'],
+            'commands.*.group_ref' => ['sometimes', 'string', 'max:100'],
+            'commands.*.parent_group_id' => ['sometimes', 'integer'],
+            'commands.*.parent_group_ref' => ['sometimes', 'string', 'max:100'],
             'commands.*.data' => ['sometimes', 'array'],
         ];
     }
@@ -103,8 +111,53 @@ class ExecuteProjectCommandsRequest extends FormRequest
             return [
                 'part_id' => ['required_without:part_ref', 'integer'],
                 'part_ref' => ['required_without:part_id', 'string', 'max:100'],
+                'group_id' => ['sometimes', 'integer'],
+                'group_ref' => ['sometimes', 'string', 'max:100'],
                 'data' => ['sometimes', 'array:position_x,position_y,position_z,rotation_x,rotation_y,rotation_z,mirrored'],
                 ...$this->transformRules(),
+            ];
+        }
+
+        if ($type === 'create_group') {
+            return [
+                'parent_group_id' => ['sometimes', 'integer'],
+                'parent_group_ref' => ['sometimes', 'string', 'max:100'],
+                'data' => ['required', 'array:name,is_visible,is_locked,sort_order'],
+                'data.name' => ['required', 'string', 'max:255'],
+                'data.is_visible' => ['sometimes', 'boolean'],
+                'data.is_locked' => ['sometimes', 'boolean'],
+                'data.sort_order' => ['sometimes', 'integer', 'min:0', 'max:100000'],
+            ];
+        }
+
+        if ($type === 'update_group') {
+            return [
+                'group_id' => ['required_without:group_ref', 'integer'],
+                'group_ref' => ['required_without:group_id', 'string', 'max:100'],
+                'data' => ['required', 'array:name,parent_id,is_visible,is_locked,sort_order'],
+                'data.name' => ['sometimes', 'string', 'max:255'],
+                'data.parent_id' => ['sometimes', 'nullable', 'integer'],
+                'data.is_visible' => ['sometimes', 'boolean'],
+                'data.is_locked' => ['sometimes', 'boolean'],
+                'data.sort_order' => ['sometimes', 'integer', 'min:0', 'max:100000'],
+            ];
+        }
+
+        if ($type === 'delete_group') {
+            return [
+                'group_id' => ['required_without:group_ref', 'integer'],
+                'group_ref' => ['required_without:group_id', 'string', 'max:100'],
+                'data' => ['sometimes', 'array:delete_contents'],
+                'data.delete_contents' => ['sometimes', 'boolean'],
+            ];
+        }
+
+        if ($type === 'assign_instance_to_group') {
+            return [
+                'instance_id' => ['required_without:instance_ref', 'integer'],
+                'instance_ref' => ['required_without:instance_id', 'string', 'max:100'],
+                'group_id' => ['sometimes', 'integer'],
+                'group_ref' => ['sometimes', 'string', 'max:100'],
             ];
         }
 

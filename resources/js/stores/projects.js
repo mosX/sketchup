@@ -6,6 +6,7 @@ export const useProjectsStore = defineStore('projects', {
         items: [],
         activeProject: null,
         parts: [],
+        assemblyGroups: [],
         loading: false,
     }),
 
@@ -57,6 +58,34 @@ export const useProjectsStore = defineStore('projects', {
             this.parts = data.data;
 
             return this.parts;
+        },
+
+        async fetchAssemblyGroups(projectId) {
+            const { data } = await axios.get(`/projects/${projectId}/assembly-groups`);
+            this.assemblyGroups = data.data;
+
+            return this.assemblyGroups;
+        },
+
+        async createAssemblyGroup(projectId, payload) {
+            const { data } = await axios.post(`/projects/${projectId}/assembly-groups`, payload);
+            this.assemblyGroups.push(data.data);
+
+            return data.data;
+        },
+
+        async updateAssemblyGroup(projectId, groupId, payload) {
+            const { data } = await axios.patch(`/projects/${projectId}/assembly-groups/${groupId}`, payload);
+            const index = this.assemblyGroups.findIndex((group) => group.id === groupId);
+
+            if (index !== -1) this.assemblyGroups[index] = data.data;
+
+            return data.data;
+        },
+
+        async deleteAssemblyGroup(projectId, groupId, deleteContents = false) {
+            await axios.delete(`/projects/${projectId}/assembly-groups/${groupId}`, { data: { delete_contents: deleteContents } });
+            await Promise.all([this.fetchAssemblyGroups(projectId), this.fetchParts(projectId)]);
         },
 
         async createPart(projectId, payload) {

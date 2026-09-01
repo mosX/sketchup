@@ -31,6 +31,7 @@
     .button-primary:disabled { opacity: .65; }
     .button-secondary { border: 1px solid #deded9; background: white; color: #454b47; }
     .button-secondary:hover { border-color: #123c2e; color: #123c2e; }
+    .button-secondary.active { border-color: #287158; background: #edf4ef; color: #174a38; }
     .button-accent { border: 1px solid #d7f36a; background: #d7f36a; color: #123c2e; }
     .button-compact { min-height: 2.3rem; padding: .5rem .9rem; font-size: .75rem; }
     .eyebrow { color: #287158; font-size: .7rem; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
@@ -193,7 +194,7 @@
     .editor-textarea { margin-top: .5rem; min-height: 6rem; width: 100%; resize: none; border: 1px solid #deded9; border-radius: .7rem; background: #f7f8f5; padding: .7rem; color: #454b47; font-size: .72rem; outline: none; }
     .editor-textarea:focus { border-color: #5d8f77; }
     .operation-badge { border-radius: 999px; background: #f2eee4; padding: .22rem .45rem; color: #83643f; font-size: .55rem; font-weight: 800; }
-    .operation-add-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; margin-top: .8rem; }
+    .operation-add-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .35rem; margin-top: .8rem; }
     .operation-add-grid button { display: grid; min-height: 3.7rem; place-items: center; align-content: center; gap: .2rem; border: 1px dashed #cbd4ce; border-radius: .6rem; background: #f7f9f6; padding: .35rem .2rem; color: #56635c; font-size: .54rem; font-weight: 750; line-height: 1.2; }
     .operation-add-grid button:hover { border-color: #6f9a83; background: #edf4ef; color: #174a38; }
     .operation-add-grid span { color: #287158; font-size: 1rem; line-height: 1; }

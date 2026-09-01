@@ -18,6 +18,7 @@ class PartInstanceResource extends JsonResource
             'id' => $this->id,
             'project_id' => $this->project_id,
             'part_definition_id' => $this->part_definition_id,
+            'assembly_group_id' => $this->assembly_group_id,
             'position' => [
                 'x' => $this->position_x,
                 'y' => $this->position_y,

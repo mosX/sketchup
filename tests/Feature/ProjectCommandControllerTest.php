@@ -128,6 +128,152 @@ class ProjectCommandControllerTest extends TestCase
         $this->assertDatabaseCount('part_definitions', 0);
     }
 
+    public function test_batch_command_accepts_surface_based_woodworking_operations(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user, ['projects:write']);
+
+        $response = $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 1,
+            'commands' => [[
+                'type' => 'create_part',
+                'data' => [
+                    'name' => 'Edge grooved rail',
+                    'material' => 'Oak',
+                    'length' => 600,
+                    'width' => 80,
+                    'thickness' => 30,
+                    'grain_axis' => 'length',
+                    'operations' => [
+                        [
+                            'type' => 'groove',
+                            'face' => 'left',
+                            'center_u' => 300,
+                            'center_v' => 15,
+                            'path_angle' => 0,
+                            'groove_length' => 240,
+                            'width' => 4,
+                            'depth' => 10,
+                            'blade_diameter' => 190,
+                        ],
+                        [
+                            'type' => 'edge_roundover',
+                            'edge' => 'top_left',
+                            'radius' => 6,
+                        ],
+                        [
+                            'type' => 'plunge_route',
+                            'face' => 'right',
+                            'route_mode' => 'point',
+                            'start_u' => 300,
+                            'start_v' => 15,
+                            'path_angle' => 0,
+                            'travel_length' => 0,
+                            'cutter_diameter' => 8,
+                            'cutter_profile' => 'straight',
+                            'cutter_angle' => 0,
+                            'depth' => 12,
+                        ],
+                        [
+                            'type' => 'drill',
+                            'face' => 'start',
+                            'center_u' => 40,
+                            'center_v' => 15,
+                            'diameter' => 8,
+                            'depth' => 600,
+                            'through' => true,
+                        ],
+                    ],
+                ],
+            ]],
+        ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.committed', true)
+            ->assertJsonPath('data.revision', 2);
+
+        $this->assertDatabaseHas('part_definitions', [
+            'project_id' => $project->id,
+            'name' => 'Edge grooved rail',
+        ]);
+    }
+
+    public function test_batch_command_creates_group_and_assigns_new_instance(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user, ['projects:write']);
+
+        $response = $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 1,
+            'commands' => [
+                [
+                    'type' => 'create_group',
+                    'temporary_id' => 'roof',
+                    'data' => ['name' => 'Крыша'],
+                ],
+                [
+                    'type' => 'create_group',
+                    'temporary_id' => 'frame',
+                    'data' => ['name' => 'Каркас'],
+                ],
+                [
+                    'type' => 'create_part',
+                    'temporary_id' => 'rafter',
+                    'data' => [
+                        'name' => 'Стропило',
+                        'material' => 'Сосна',
+                        'length' => 3000,
+                        'width' => 150,
+                        'thickness' => 50,
+                        'grain_axis' => 'length',
+                        'operations' => [],
+                    ],
+                ],
+                [
+                    'type' => 'create_instance',
+                    'temporary_id' => 'rafter-instance',
+                    'part_ref' => 'rafter',
+                    'group_ref' => 'roof',
+                    'data' => ['position_z' => 2400],
+                ],
+                [
+                    'type' => 'assign_instance_to_group',
+                    'instance_ref' => 'rafter-instance',
+                    'group_ref' => 'frame',
+                ],
+                [
+                    'type' => 'update_group',
+                    'group_ref' => 'roof',
+                    'data' => ['name' => 'Кровля'],
+                ],
+            ],
+        ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.committed', true)
+            ->assertJsonPath('data.results.0.type', 'create_group')
+            ->assertJsonPath('data.results.4.type', 'assign_instance_to_group')
+            ->assertJsonPath('data.results.5.type', 'update_group');
+
+        $roofGroupId = $response->json('data.results.0.group_id');
+        $frameGroupId = $response->json('data.results.1.group_id');
+        $instanceId = $response->json('data.results.3.instance_id');
+
+        $this->assertDatabaseHas('assembly_groups', [
+            'id' => $roofGroupId,
+            'project_id' => $project->id,
+            'name' => 'Кровля',
+        ]);
+        $this->assertDatabaseHas('part_instances', [
+            'id' => $instanceId,
+            'assembly_group_id' => $frameGroupId,
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */

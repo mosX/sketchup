@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['project_id', 'position_x', 'position_y', 'position_z', 'rotation_x', 'rotation_y', 'rotation_z', 'mirrored'])]
+#[Fillable(['project_id', 'assembly_group_id', 'position_x', 'position_y', 'position_z', 'rotation_x', 'rotation_y', 'rotation_z', 'mirrored'])]
 class PartInstance extends Model
 {
     /** @use HasFactory<PartInstanceFactory> */
@@ -38,5 +38,10 @@ class PartInstance extends Model
     public function partDefinition(): BelongsTo
     {
         return $this->belongsTo(PartDefinition::class);
+    }
+
+    public function assemblyGroup(): BelongsTo
+    {
+        return $this->belongsTo(AssemblyGroup::class);
     }
 }

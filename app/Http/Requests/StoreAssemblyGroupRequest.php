@@ -8,7 +8,7 @@ use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-class StorePartInstanceRequest extends FormRequest
+class StoreAssemblyGroupRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -28,20 +28,15 @@ class StorePartInstanceRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'quantity' => ['sometimes', 'integer', 'between:1,20'],
-            'assembly_group_id' => [
-                'sometimes',
+            'name' => ['required', 'string', 'max:255'],
+            'parent_id' => [
                 'nullable',
                 'integer',
                 Rule::exists(AssemblyGroup::class, 'id')->where('project_id', $this->route('project')?->id),
             ],
-            'position_x' => ['sometimes', 'numeric', 'between:-100000,100000'],
-            'position_y' => ['sometimes', 'numeric', 'between:-100000,100000'],
-            'position_z' => ['sometimes', 'numeric', 'between:-100000,100000'],
-            'rotation_x' => ['sometimes', 'numeric', 'between:-360,360'],
-            'rotation_y' => ['sometimes', 'numeric', 'between:-360,360'],
-            'rotation_z' => ['sometimes', 'numeric', 'between:-360,360'],
-            'mirrored' => ['sometimes', 'boolean'],
+            'is_visible' => ['sometimes', 'boolean'],
+            'is_locked' => ['sometimes', 'boolean'],
+            'sort_order' => ['sometimes', 'integer', 'min:0', 'max:100000'],
         ];
     }
 }

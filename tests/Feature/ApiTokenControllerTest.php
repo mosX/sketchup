@@ -51,6 +51,42 @@ class ApiTokenControllerTest extends TestCase
         $this->assertDatabaseCount('personal_access_tokens', 0);
     }
 
+    public function test_owner_creates_global_api_key_that_can_access_and_create_projects(): void
+    {
+        $user = User::factory()->create();
+        $existingProject = Project::factory()->for($user)->create();
+        Sanctum::actingAs($user, ['*']);
+
+        $response = $this->postJson('/api/v1/api-tokens', [
+            'name' => 'Global workshop agent',
+            'abilities' => ['projects:read', 'projects:write'],
+            'expires_in_days' => 30,
+        ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.abilities', ['projects:read', 'projects:write'])
+            ->assertJsonMissingPath('data.project_id')
+            ->assertJsonStructure(['token']);
+
+        $plainTextToken = $response->json('token');
+
+        $this->withToken($plainTextToken)
+            ->getJson("/api/v1/projects/{$existingProject->id}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $existingProject->id);
+
+        $this->withToken($plainTextToken)
+            ->postJson('/api/v1/projects', ['name' => 'Created by global agent'])
+            ->assertCreated()
+            ->assertJsonPath('data.name', 'Created by global agent');
+
+        $this->assertDatabaseHas('projects', [
+            'user_id' => $user->id,
+            'name' => 'Created by global agent',
+        ]);
+    }
+
     public function test_project_scoped_key_returns_404_for_another_owned_project(): void
     {
         $user = User::factory()->create();

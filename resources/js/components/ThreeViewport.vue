@@ -69,7 +69,10 @@
             </div>
             <p v-if="!transformState.axis">Выберите ось: <kbd>X</kbd> <kbd>Y</kbd> <kbd>Z</kbd></p>
             <p v-else>Двигайте мышь · <b>{{ transformValueLabel }}</b></p>
-            <small>ЛКМ / Enter — применить · Esc / ПКМ — отменить · Shift — точно</small>
+            <p v-if="transformState.numericInput" class="text-amber-300">Точный ввод: <b>{{ transformState.numericInput }}</b></p>
+            <p v-else-if="transformState.snap" class="text-emerald-300">Привязка: <b>{{ transformState.snap.label }}</b></p>
+            <small>Введите число для точного значения · Ctrl — без привязки · Shift — точно</small>
+            <small>ЛКМ / Enter — применить · Esc / ПКМ — отменить</small>
         </div>
         <div class="viewport-hint">СКМ / Alt+ЛКМ — вращение · Колесо — масштаб · ПКМ — перемещение</div>
         <div class="axis-widget" aria-hidden="true"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
@@ -80,7 +83,22 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Brush, Evaluator, INTERSECTION, SUBTRACTION } from 'three-bvh-csg';
+import {
+    clamp,
+    clampDrillCenter,
+    clampGrooveCenter,
+    clampPlungeStart,
+    drillPlacement,
+    edgeRoundoverMaximumRadius,
+    grooveFaceFrame,
+    groovePlacement,
+    millimeterScale,
+    partSize,
+    plungeMaximumRadius,
+    plungeRoutePlacement,
+} from '../editor/geometry/coordinates.js';
+import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/geometry/cutters.js';
+import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
 
 const props = defineProps({
     mode: { type: String, default: 'assembly' },
@@ -88,6 +106,8 @@ const props = defineProps({
     activePart: { type: Object, default: null },
     selectedInstanceId: { type: Number, default: null },
     selectedOperationId: { type: String, default: null },
+    visibleInstanceIds: { type: Array, default: null },
+    lockedInstanceIds: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(['select-instance', 'select-operation', 'update-operation', 'commit-instance-transform']);
@@ -97,7 +117,6 @@ const anglePanelOpen = ref(false);
 const hoveredOperationId = ref(null);
 const operationToolHovered = ref(false);
 const transformState = ref(null);
-const millimeterScale = 0.01;
 const editorAxisDirections = {
     x: new THREE.Vector3(1, 0, 0),
     y: new THREE.Vector3(0, 0, 1),
@@ -116,6 +135,7 @@ const palette = ['#b98552', '#c99b65', '#a87345', '#d0a878', '#98704c'];
 const objectMeshes = [];
 const operationHelpers = [];
 const lastPointerPosition = new THREE.Vector2();
+const geometryWorker = createGeometryWorkerClient();
 let animationFrame;
 let camera;
 let controls;
@@ -127,8 +147,12 @@ let dragState = null;
 let hoverClearTimer = null;
 let transformGuide = null;
 let hasPointerPosition = false;
+let rebuildTimer = null;
+let rebuildVersion = 0;
 
 const selectedOperation = computed(() => props.activePart?.operations?.find((operation) => operation.id === props.selectedOperationId) ?? null);
+const visibleInstanceIdSet = computed(() => props.visibleInstanceIds === null ? null : new Set(props.visibleInstanceIds));
+const lockedInstanceIdSet = computed(() => new Set(props.lockedInstanceIds));
 const angleCapableOperation = computed(() => ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type));
 const operationToolVisible = computed(() => anglePanelOpen.value || operationToolHovered.value || hoveredOperationId.value === props.selectedOperationId);
 const selectedOperationLabel = computed(() => ({
@@ -188,227 +212,10 @@ const emptyMessage = computed(() => {
     return null;
 });
 
-const partSize = (part) => ({
-    length: Number(part.dimensions.length) * millimeterScale,
-    width: Number(part.dimensions.width) * millimeterScale,
-    thickness: Number(part.dimensions.thickness) * millimeterScale,
-});
-
-const halfSpaceCutter = (part, point, normal, kerf = 0) => {
-    const { length, width, thickness } = partSize(part);
-    const extent = Math.max(length, width, thickness) * 6 + 20;
-    const removalNormal = normal.clone().normalize();
-    const boundary = point.clone().addScaledVector(removalNormal, -Number(kerf) * millimeterScale / 2);
-    const brush = new Brush(new THREE.BoxGeometry(extent, extent, extent));
-    brush.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), removalNormal);
-    brush.position.copy(boundary).addScaledVector(removalNormal, extent / 2);
-
-    return brush;
-};
-
-const crossCutPlane = (part, operation) => {
-    const { length } = partSize(part);
-    const miter = THREE.MathUtils.degToRad(Number(operation.miter_angle));
-    const bevel = THREE.MathUtils.degToRad(Number(operation.bevel_angle));
-    const normal = new THREE.Vector3(
-        Math.cos(bevel) * Math.cos(miter),
-        Math.sin(bevel),
-        Math.cos(bevel) * Math.sin(miter),
-    ).normalize();
-    const point = new THREE.Vector3(-length / 2 + Number(operation.position) * millimeterScale, 0, 0);
-
-    return { point, normal };
-};
-
-const isPartialDepthCut = (part, operation) => Number(operation.cut_depth ?? part.dimensions.thickness) < Number(part.dimensions.thickness) - 0.01;
-
-const depthLimitedKerfCutter = (part, operation, point, normal) => {
-    const { length, width, thickness } = partSize(part);
-    const extent = Math.max(length, width, thickness) * 6 + 20;
-    const kerf = Math.max(Number(operation.kerf) * millimeterScale, 0.001);
-    const depth = Math.min(Number(operation.cut_depth) * millimeterScale, thickness);
-    const epsilon = 0.004;
-    const blade = new Brush(new THREE.BoxGeometry(kerf, extent, extent));
-    blade.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), normal.clone().normalize());
-    blade.position.copy(point);
-    blade.updateMatrixWorld();
-
-    const depthBand = new Brush(new THREE.BoxGeometry(extent, depth + epsilon, extent));
-    depthBand.position.y = operation.cut_direction === 'bottom_up'
-        ? -thickness / 2 + depth / 2 - epsilon / 2
-        : thickness / 2 - depth / 2 + epsilon / 2;
-    depthBand.updateMatrixWorld();
-
-    const evaluator = new Evaluator();
-    evaluator.useGroups = false;
-    const cutter = evaluator.evaluate(blade, depthBand, INTERSECTION);
-    blade.geometry.dispose();
-    depthBand.geometry.dispose();
-
-    return cutter;
-};
-
-const crossCutCutter = (part, operation) => {
-    const { point, normal } = crossCutPlane(part, operation);
-
-    if (isPartialDepthCut(part, operation)) {
-        return depthLimitedKerfCutter(part, operation, point, normal);
-    }
-
-    if (operation.keep_side === 'end') {
-        normal.negate();
-    }
-
-    return halfSpaceCutter(part, point, normal, operation.kerf);
-};
-
-const ripCutPlane = (part, operation) => {
-    const { length, width } = partSize(part);
-    const side = operation.reference_side === 'right' ? 1 : -1;
-    const startZ = side * (width / 2 - Number(operation.start_offset) * millimeterScale);
-    const endZ = side * (width / 2 - Number(operation.end_offset) * millimeterScale);
-    const direction = new THREE.Vector3(length, 0, endZ - startZ);
-    const inward = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
-
-    if (operation.reference_side === 'right') {
-        inward.negate();
-    }
-
-    const bevel = THREE.MathUtils.degToRad(Number(operation.bevel_angle));
-    const normal = inward.multiplyScalar(Math.cos(bevel));
-    normal.y = Math.sin(bevel);
-
-    return { point: new THREE.Vector3(-length / 2, 0, startZ), normal: normal.normalize() };
-};
-
-const ripCutCutter = (part, operation) => {
-    const { point, normal } = ripCutPlane(part, operation);
-
-    if (isPartialDepthCut(part, operation)) {
-        return depthLimitedKerfCutter(part, operation, point, normal);
-    }
-
-    if (operation.keep_side === 'reference') {
-        normal.negate();
-    }
-
-    return halfSpaceCutter(part, point, normal, operation.kerf);
-};
-
-const grooveCutter = (part, operation) => {
-    const { length, width, thickness } = partSize(part);
-    const grooveWidth = Number(operation.width) * millimeterScale;
-    const depth = Number(operation.depth) * millimeterScale;
-    const start = Number(operation.start) * millimeterScale;
-    const end = Number(operation.end) * millimeterScale;
-    const offset = Number(operation.offset) * millimeterScale;
-    const epsilon = 0.004;
-    const alongLength = operation.direction === 'length';
-    const geometry = new THREE.BoxGeometry(
-        alongLength ? end - start : grooveWidth,
-        depth + epsilon,
-        alongLength ? grooveWidth : end - start,
-    );
-    const brush = new Brush(geometry);
-    brush.position.set(
-        alongLength ? -length / 2 + (start + end) / 2 : -length / 2 + offset,
-        operation.face === 'bottom' ? -thickness / 2 + depth / 2 - epsilon / 2 : thickness / 2 - depth / 2 + epsilon / 2,
-        alongLength ? -width / 2 + offset : -width / 2 + (start + end) / 2,
-    );
-
-    return brush;
-};
-
-const operationCutter = (part, operation) => {
-    if (operation.type === 'cross_cut') return crossCutCutter(part, operation);
-    if (operation.type === 'rip_cut') return ripCutCutter(part, operation);
-    if (operation.type === 'groove') return grooveCutter(part, operation);
-
-    return null;
-};
-
-const subtractOperations = (part, operations) => {
-    const { length, width, thickness } = partSize(part);
-    const evaluator = new Evaluator();
-    evaluator.useGroups = false;
-    let result = new Brush(new THREE.BoxGeometry(length, thickness, width));
-
-    operations.filter((operation) => operation.enabled !== false).forEach((operation) => {
-        const cutter = operationCutter(part, operation);
-
-        if (!cutter) return;
-
-        result.updateMatrixWorld();
-        cutter.updateMatrixWorld();
-        const previous = result;
-        result = evaluator.evaluate(previous, cutter, SUBTRACTION);
-        previous.geometry.dispose();
-        cutter.geometry.dispose();
-    });
-
-    return result;
-};
-
-const createPartGeometry = (part) => {
-    const { length, width, thickness } = partSize(part);
-    let result;
-
-    try {
-        result = subtractOperations(part, part.operations ?? []);
-    } catch (error) {
-        result?.geometry.dispose();
-        console.error('Не удалось построить операцию заготовки.', error);
-        result = new Brush(new THREE.BoxGeometry(length, thickness, width));
-    }
-
-    result.geometry.computeVertexNormals();
-    result.geometry.computeBoundingSphere();
-
-    return result.geometry;
-};
-
-const createOffcutGeometry = (part, operation) => {
-    if (!operation || operation.enabled === false) return null;
-
-    const operationIndex = (part.operations ?? []).findIndex((item) => item.id === operation.id);
-
-    if (operationIndex < 0) return null;
-
-    let stock;
-    let cutter;
-
-    try {
-        stock = subtractOperations(part, part.operations.slice(0, operationIndex));
-        cutter = operationCutter(part, operation);
-
-        if (!cutter) {
-            stock.geometry.dispose();
-            return null;
-        }
-
-        stock.updateMatrixWorld();
-        cutter.updateMatrixWorld();
-        const evaluator = new Evaluator();
-        evaluator.useGroups = false;
-        const offcut = evaluator.evaluate(stock, cutter, INTERSECTION);
-        stock.geometry.dispose();
-        cutter.geometry.dispose();
-        offcut.geometry.computeVertexNormals();
-        offcut.geometry.computeBoundingSphere();
-
-        return offcut.geometry;
-    } catch (error) {
-        stock?.geometry.dispose();
-        cutter?.geometry.dispose();
-        console.error('Не удалось показать удаляемую часть заготовки.', error);
-
-        return null;
-    }
-};
-
-const createOffcutPreview = (part) => {
+const createOffcutPreview = (part, geometry) => {
     const operation = part.operations?.find((item) => item.id === props.selectedOperationId);
-    const geometry = createOffcutGeometry(part, operation);
+
+    if (!['cross_cut', 'rip_cut'].includes(operation?.type)) return;
 
     if (!geometry || geometry.getAttribute('position')?.count === 0) {
         geometry?.dispose();
@@ -437,13 +244,138 @@ const createOffcutPreview = (part) => {
     objectsGroup.add(offcut);
 };
 
+const createGrooveFacePreview = (part, operation) => {
+    const placement = groovePlacement(part, operation);
+    const geometry = new THREE.PlaneGeometry(placement.frame.uSize, placement.frame.vSize);
+    const material = new THREE.MeshBasicMaterial({
+        color: '#3f9272',
+        transparent: true,
+        opacity: 0.1,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+    });
+    const preview = new THREE.Mesh(geometry, material);
+    const orientation = new THREE.Matrix4().makeBasis(placement.frame.u, placement.frame.v, placement.frame.inward);
+    preview.quaternion.setFromRotationMatrix(orientation);
+    preview.position.copy(placement.frame.center).addScaledVector(placement.frame.inward, -0.006);
+    preview.position.y += Number(part.dimensions.thickness) * millimeterScale / 2;
+    preview.renderOrder = 1;
+    objectsGroup.add(preview);
+};
+
+const createPlungeFacePreview = (part, operation) => {
+    const placement = plungeRoutePlacement(part, operation);
+    const geometry = new THREE.PlaneGeometry(placement.frame.uSize, placement.frame.vSize);
+    const material = new THREE.MeshBasicMaterial({
+        color: '#397e9b',
+        transparent: true,
+        opacity: 0.1,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+    });
+    const preview = new THREE.Mesh(geometry, material);
+    preview.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+        placement.frame.u,
+        placement.frame.v,
+        placement.frame.inward,
+    ));
+    preview.position.copy(placement.frame.center).addScaledVector(placement.frame.inward, -0.006);
+    preview.position.y += Number(part.dimensions.thickness) * millimeterScale / 2;
+    preview.renderOrder = 1;
+    objectsGroup.add(preview);
+};
+
+const createDrillFacePreview = (part, operation) => {
+    const placement = drillPlacement(part, operation);
+    const geometry = new THREE.PlaneGeometry(placement.frame.uSize, placement.frame.vSize);
+    const material = new THREE.MeshBasicMaterial({
+        color: '#397e9b',
+        transparent: true,
+        opacity: 0.1,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+    });
+    const preview = new THREE.Mesh(geometry, material);
+    preview.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+        placement.frame.u,
+        placement.frame.v,
+        placement.frame.inward,
+    ));
+    preview.position.copy(placement.frame.center).addScaledVector(placement.frame.inward, -0.006);
+    preview.position.y += Number(part.dimensions.thickness) * millimeterScale / 2;
+    preview.renderOrder = 1;
+    objectsGroup.add(preview);
+};
+
+const createPlungeRouteHandles = (part, operation) => {
+    const placement = plungeRoutePlacement(part, operation);
+    const partExtent = Math.max(...Object.values(partSize(part)));
+    const radius = clamp(partExtent * 0.018, 0.045, 0.11);
+    const baseOffset = Number(part.dimensions.thickness) * millimeterScale / 2;
+    const handles = [{ name: 'start', point: placement.startPoint, color: '#f4b44b' }];
+
+    if (operation.route_mode === 'path') {
+        handles.push({
+            name: 'end',
+            point: placement.startPoint.clone().addScaledVector(placement.path, placement.travelLength),
+            color: '#d84d32',
+        });
+    }
+
+    handles.forEach(({ name, point, color }) => {
+        const handle = new THREE.Mesh(
+            new THREE.SphereGeometry(radius, 18, 12),
+            new THREE.MeshBasicMaterial({ color, depthTest: false }),
+        );
+        handle.position.copy(point).addScaledVector(placement.frame.inward, -radius * 0.35);
+        handle.position.y += baseOffset;
+        handle.renderOrder = 5;
+        handle.userData.operationId = operation.id;
+        handle.userData.isOperationHelper = true;
+        handle.userData.plungeHandle = name;
+        operationHelpers.push(handle);
+        objectsGroup.add(handle);
+    });
+};
+
+const createGrooveEndpointHandles = (part, operation) => {
+    const placement = groovePlacement(part, operation);
+    const partExtent = Math.max(...Object.values(partSize(part)));
+    const radius = clamp(partExtent * 0.018, 0.045, 0.11);
+    const baseOffset = Number(part.dimensions.thickness) * millimeterScale / 2;
+
+    for (const side of [-1, 1]) {
+        const material = new THREE.MeshBasicMaterial({ color: side < 0 ? '#f4b44b' : '#d84d32', depthTest: false });
+        const handle = new THREE.Mesh(new THREE.SphereGeometry(radius, 18, 12), material);
+        handle.position.copy(placement.surfacePoint)
+            .addScaledVector(placement.path, placement.length / 2 * side)
+            .addScaledVector(placement.frame.inward, -radius * 0.35);
+        handle.position.y += baseOffset;
+        handle.renderOrder = 5;
+        handle.userData.operationId = operation.id;
+        handle.userData.isOperationHelper = true;
+        handle.userData.grooveHandle = side < 0 ? 'start' : 'end';
+        operationHelpers.push(handle);
+        objectsGroup.add(handle);
+    }
+};
+
 const createOperationPreview = (part, operation) => {
     if (operation.enabled === false) return;
 
     let preview;
 
     if (operation.type === 'groove') {
-        preview = grooveCutter(part, operation);
+        createGrooveFacePreview(part, operation);
+        preview = operationPreviewObject(part, operation);
+    } else if (operation.type === 'plunge_route') {
+        createPlungeFacePreview(part, operation);
+        preview = operationPreviewObject(part, operation);
+    } else if (operation.type === 'drill') {
+        createDrillFacePreview(part, operation);
+        preview = operationPreviewObject(part, operation);
+    } else if (operation.type === 'edge_roundover') {
+        preview = operationPreviewObject(part, operation);
     } else {
         const { length, width, thickness } = partSize(part);
         const extent = Math.max(length, width, thickness) * 1.4;
@@ -467,8 +399,19 @@ const createOperationPreview = (part, operation) => {
     preview.position.y += Number(part.dimensions.thickness) * millimeterScale / 2;
     preview.userData.operationId = operation.id;
     preview.userData.isOperationHelper = true;
+    preview.userData.grooveHandle = operation.type === 'groove' ? 'body' : null;
+    preview.userData.plungeHandle = operation.type === 'plunge_route' ? 'body' : null;
+    preview.userData.drillHandle = operation.type === 'drill' ? 'body' : null;
     operationHelpers.push(preview);
     objectsGroup.add(preview);
+
+    if (operation.type === 'groove') {
+        createGrooveEndpointHandles(part, operation);
+    }
+
+    if (operation.type === 'plunge_route') {
+        createPlungeRouteHandles(part, operation);
+    }
 };
 
 const createOperationPreviews = (part) => {
@@ -491,8 +434,7 @@ const clearObjects = () => {
     });
 };
 
-const createMesh = (part, instance = null) => {
-    const geometry = createPartGeometry(part);
+const createMesh = (part, geometry, instance = null) => {
     const isSelected = instance?.id === props.selectedInstanceId;
     const material = new THREE.MeshStandardMaterial({
         color: palette[part.id % palette.length],
@@ -504,6 +446,7 @@ const createMesh = (part, instance = null) => {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData.instanceId = instance?.id ?? null;
+    mesh.userData.partName = part.name;
 
     const edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
@@ -522,24 +465,84 @@ const createMesh = (part, instance = null) => {
     objectsGroup.add(mesh);
 };
 
-const rebuildObjects = () => {
+const fallbackPartGeometry = (part) => {
+    const { length, width, thickness } = partSize(part);
+
+    return new THREE.BoxGeometry(length, thickness, width);
+};
+
+const rebuildObjects = async () => {
     if (!objectsGroup) {
         return;
     }
 
+    const currentVersion = ++rebuildVersion;
+    geometryWorker.cancelAll();
     clearObjects();
 
     if (props.mode === 'part' && props.activePart) {
-        createMesh(props.activePart);
-        createOffcutPreview(props.activePart);
-        createOperationPreviews(props.activePart);
-        controls.target.set(0, Number(props.activePart.dimensions.thickness) * millimeterScale / 2, 0);
+        const part = props.activePart;
+        createOperationPreviews(part);
+        controls.target.set(0, Number(part.dimensions.thickness) * millimeterScale / 2, 0);
+
+        try {
+            const includeOffcut = ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type)
+                ? props.selectedOperationId
+                : null;
+            const result = await geometryWorker.calculate(part, includeOffcut);
+
+            if (currentVersion !== rebuildVersion) {
+                result.partGeometry?.dispose();
+                result.offcutGeometry?.dispose();
+                return;
+            }
+
+            createMesh(part, result.partGeometry ?? fallbackPartGeometry(part));
+            createOffcutPreview(part, result.offcutGeometry);
+        } catch (error) {
+            if (currentVersion !== rebuildVersion) return;
+            if (error.name === 'AbortError') return;
+
+            console.error('Не удалось пересчитать геометрию в фоновом потоке.', error);
+            createMesh(part, fallbackPartGeometry(part));
+        }
+
         return;
     }
 
-    props.parts.forEach((part) => {
-        part.instances?.forEach((instance) => createMesh(part, instance));
+    const visibleParts = props.parts.filter((part) => part.instances?.length);
+    const results = await Promise.all(visibleParts.map(async (part) => {
+        try {
+            const result = await geometryWorker.calculate(part);
+            return { part, geometry: result.partGeometry ?? fallbackPartGeometry(part) };
+        } catch (error) {
+            if (error.name === 'AbortError') return { part, geometry: null };
+
+            console.error('Не удалось пересчитать геометрию экземпляров в фоновом потоке.', error);
+            return { part, geometry: fallbackPartGeometry(part) };
+        }
+    }));
+
+    if (currentVersion !== rebuildVersion) {
+        results.forEach(({ geometry }) => geometry?.dispose());
+        return;
+    }
+
+    results.forEach(({ part, geometry }) => {
+        if (!geometry) return;
+
+        part.instances
+            .filter((instance) => visibleInstanceIdSet.value === null || visibleInstanceIdSet.value.has(instance.id))
+            .forEach((instance) => createMesh(part, geometry, instance));
     });
+};
+
+const scheduleRebuildObjects = () => {
+    window.clearTimeout(rebuildTimer);
+    rebuildTimer = window.setTimeout(() => {
+        rebuildTimer = null;
+        rebuildObjects();
+    }, 50);
 };
 
 const rayFromEvent = (event) => {
@@ -554,7 +557,6 @@ const rayFromEvent = (event) => {
     return raycaster;
 };
 
-const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
 const preventContextMenu = (event) => event.preventDefault();
 
 const selectedInstanceMesh = () => objectMeshes.find((mesh) => mesh.userData.instanceId === props.selectedInstanceId) ?? null;
@@ -594,7 +596,43 @@ const showTransformGuide = (axis) => {
     objectsGroup.add(transformGuide);
 };
 
-const applyTransformPreview = (value) => {
+const sceneAxisName = (editorAxis) => ({ x: 'x', y: 'z', z: 'y' }[editorAxis]);
+
+const boxAnchors = (box, axis) => [
+    { value: box.min[axis], label: 'минимальная грань' },
+    { value: (box.min[axis] + box.max[axis]) / 2, label: 'центр' },
+    { value: box.max[axis], label: 'максимальная грань' },
+];
+
+const findMoveSnap = (mesh, editorAxis) => {
+    const axis = sceneAxisName(editorAxis);
+    const selectedAnchors = boxAnchors(new THREE.Box3().setFromObject(mesh), axis);
+    const maximumDistance = 15 * millimeterScale;
+    let nearest = null;
+
+    objectMeshes.forEach((candidate) => {
+        if (candidate === mesh) return;
+
+        const candidateAnchors = boxAnchors(new THREE.Box3().setFromObject(candidate), axis);
+
+        selectedAnchors.forEach((selectedAnchor) => {
+            candidateAnchors.forEach((candidateAnchor) => {
+                const delta = candidateAnchor.value - selectedAnchor.value;
+
+                if (Math.abs(delta) > maximumDistance || (nearest && Math.abs(delta) >= Math.abs(nearest.delta))) return;
+
+                nearest = {
+                    delta,
+                    label: `${selectedAnchor.label} → ${candidate.userData.partName}: ${candidateAnchor.label}`,
+                };
+            });
+        });
+    });
+
+    return nearest;
+};
+
+const applyTransformPreview = (value, { snap = false } = {}) => {
     const state = transformState.value;
     const data = selectedInstanceData.value;
     const mesh = selectedInstanceMesh();
@@ -611,6 +649,20 @@ const applyTransformPreview = (value) => {
     }
 
     applyInstanceTransform(mesh, data.part, position, rotation);
+    state.snap = null;
+
+    if (state.mode === 'move' && snap) {
+        const snapped = findMoveSnap(mesh, state.axis);
+
+        if (snapped) {
+            const snappedOffset = snapped.delta / millimeterScale;
+            position[state.axis] += snappedOffset;
+            value += snappedOffset;
+            state.snap = snapped;
+            applyInstanceTransform(mesh, data.part, position, rotation);
+        }
+    }
+
     state.position = position;
     state.rotation = rotation;
     state.value = value;
@@ -624,7 +676,7 @@ const beginTransform = (mode) => {
     const data = selectedInstanceData.value;
     const mesh = selectedInstanceMesh();
 
-    if (!data || !mesh || props.mode !== 'assembly') return;
+    if (!data || !mesh || props.mode !== 'assembly' || lockedInstanceIdSet.value.has(data.instance.id)) return;
 
     if (transformState.value) {
         applyTransformPreview(0);
@@ -648,6 +700,8 @@ const beginTransform = (mode) => {
         rotation: { ...data.instance.rotation },
         initialWorldPosition: { x: initialWorldPosition.x, y: initialWorldPosition.y, z: initialWorldPosition.z },
         value: 0,
+        numericInput: '',
+        snap: null,
         startPointer: { x: lastPointerPosition.x, y: lastPointerPosition.y },
     };
     controls.enabled = false;
@@ -658,6 +712,8 @@ const selectTransformAxis = (axis) => {
     if (!transformState.value) return;
 
     transformState.value.axis = axis;
+    transformState.value.numericInput = '';
+    transformState.value.snap = null;
     transformState.value.startPointer = { x: lastPointerPosition.x, y: lastPointerPosition.y };
     applyTransformPreview(0);
     showTransformGuide(axis);
@@ -735,6 +791,66 @@ const finishTransform = (shouldCommit) => {
     renderer.domElement.style.cursor = '';
 };
 
+const grooveFaceFromNormal = (normal) => {
+    const absolute = { x: Math.abs(normal.x), y: Math.abs(normal.y), z: Math.abs(normal.z) };
+
+    if (absolute.x >= absolute.y && absolute.x >= absolute.z) {
+        return normal.x >= 0 ? 'end' : 'start';
+    }
+
+    if (absolute.y >= absolute.z) {
+        return normal.y >= 0 ? 'top' : 'bottom';
+    }
+
+    return normal.z >= 0 ? 'right' : 'left';
+};
+
+const roundoverEdgeFromIntersection = (part, intersection) => {
+    const point = intersection.object.worldToLocal(intersection.point.clone());
+    const face = grooveFaceFromNormal(intersection.face.normal);
+    const { length, width, thickness } = partSize(part);
+    const candidates = {
+        top: [
+            ['top_left', Math.abs(point.z + width / 2)],
+            ['top_right', Math.abs(point.z - width / 2)],
+            ['top_start', Math.abs(point.x + length / 2)],
+            ['top_end', Math.abs(point.x - length / 2)],
+        ],
+        bottom: [
+            ['bottom_left', Math.abs(point.z + width / 2)],
+            ['bottom_right', Math.abs(point.z - width / 2)],
+            ['bottom_start', Math.abs(point.x + length / 2)],
+            ['bottom_end', Math.abs(point.x - length / 2)],
+        ],
+        left: [
+            ['top_left', Math.abs(point.y - thickness / 2)],
+            ['bottom_left', Math.abs(point.y + thickness / 2)],
+            ['start_left', Math.abs(point.x + length / 2)],
+            ['end_left', Math.abs(point.x - length / 2)],
+        ],
+        right: [
+            ['top_right', Math.abs(point.y - thickness / 2)],
+            ['bottom_right', Math.abs(point.y + thickness / 2)],
+            ['start_right', Math.abs(point.x + length / 2)],
+            ['end_right', Math.abs(point.x - length / 2)],
+        ],
+        start: [
+            ['top_start', Math.abs(point.y - thickness / 2)],
+            ['bottom_start', Math.abs(point.y + thickness / 2)],
+            ['start_left', Math.abs(point.z + width / 2)],
+            ['start_right', Math.abs(point.z - width / 2)],
+        ],
+        end: [
+            ['top_end', Math.abs(point.y - thickness / 2)],
+            ['bottom_end', Math.abs(point.y + thickness / 2)],
+            ['end_left', Math.abs(point.z + width / 2)],
+            ['end_right', Math.abs(point.z - width / 2)],
+        ],
+    }[face];
+
+    return candidates.reduce((nearest, candidate) => candidate[1] < nearest[1] ? candidate : nearest)[0];
+};
+
 const pointerDown = (event) => {
     lastPointerPosition.set(event.clientX, event.clientY);
     hasPointerPosition = true;
@@ -765,6 +881,113 @@ const pointerDown = (event) => {
 
         const helper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
 
+        if (!helper && selectedOperation.value?.type === 'groove') {
+            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+
+            if (stockIntersection?.face) {
+                const face = grooveFaceFromNormal(stockIntersection.face.normal);
+                const frame = grooveFaceFrame(props.activePart, face);
+                const maximumLength = Math.max(frame.uSize / millimeterScale * 0.8, 0.1);
+                emit('update-operation', selectedOperation.value.id, {
+                    face,
+                    center_u: frame.uSize / millimeterScale / 2,
+                    center_v: frame.vSize / millimeterScale / 2,
+                    path_angle: 0,
+                    groove_length: Math.min(Number(selectedOperation.value.groove_length), maximumLength),
+                    depth: Math.min(Number(selectedOperation.value.depth), frame.maximumDepth / millimeterScale),
+                });
+                event.preventDefault();
+            }
+
+            return;
+        }
+
+        if (!helper && selectedOperation.value?.type === 'edge_roundover') {
+            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+
+            if (stockIntersection?.face) {
+                const edge = roundoverEdgeFromIntersection(props.activePart, stockIntersection);
+                emit('update-operation', selectedOperation.value.id, {
+                    edge,
+                    radius: Math.min(Number(selectedOperation.value.radius), edgeRoundoverMaximumRadius(props.activePart, edge)),
+                });
+                event.preventDefault();
+            }
+
+            return;
+        }
+
+        if (!helper && selectedOperation.value?.type === 'plunge_route') {
+            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+
+            if (stockIntersection?.face) {
+                const operation = selectedOperation.value;
+                const face = grooveFaceFromNormal(stockIntersection.face.normal);
+                const frame = grooveFaceFrame(props.activePart, face);
+                const localPoint = stockIntersection.object.worldToLocal(stockIntersection.point.clone());
+                const relativePoint = localPoint.sub(frame.center);
+                const maximumU = frame.uSize / millimeterScale;
+                const maximumV = frame.vSize / millimeterScale;
+                const radius = Math.min(plungeMaximumRadius(operation), maximumU / 2, maximumV / 2);
+                const travelLength = operation.route_mode === 'path'
+                    ? Math.min(Number(operation.travel_length), Math.max(maximumU - radius * 2, 0.1))
+                    : 0;
+                const nextOperation = {
+                    ...operation,
+                    face,
+                    path_angle: 0,
+                    travel_length: travelLength,
+                };
+                const start = clampPlungeStart(
+                    nextOperation,
+                    frame,
+                    relativePoint.dot(frame.u) / millimeterScale + maximumU / 2,
+                    relativePoint.dot(frame.v) / millimeterScale + maximumV / 2,
+                );
+                emit('update-operation', operation.id, {
+                    face,
+                    start_u: Math.round(start.start_u * 10) / 10,
+                    start_v: Math.round(start.start_v * 10) / 10,
+                    path_angle: 0,
+                    travel_length: travelLength,
+                    depth: Math.min(Number(operation.depth), frame.maximumDepth / millimeterScale),
+                });
+                event.preventDefault();
+            }
+
+            return;
+        }
+
+        if (!helper && selectedOperation.value?.type === 'drill') {
+            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+
+            if (stockIntersection?.face) {
+                const operation = selectedOperation.value;
+                const face = grooveFaceFromNormal(stockIntersection.face.normal);
+                const frame = grooveFaceFrame(props.activePart, face);
+                const localPoint = stockIntersection.object.worldToLocal(stockIntersection.point.clone());
+                const relativePoint = localPoint.sub(frame.center);
+                const center = clampDrillCenter(
+                    operation,
+                    frame,
+                    relativePoint.dot(frame.u) / millimeterScale + frame.uSize / millimeterScale / 2,
+                    relativePoint.dot(frame.v) / millimeterScale + frame.vSize / millimeterScale / 2,
+                );
+                emit('update-operation', operation.id, {
+                    face,
+                    center_u: Math.round(center.center_u * 10) / 10,
+                    center_v: Math.round(center.center_v * 10) / 10,
+                    diameter: Math.min(Number(operation.diameter), frame.uSize / millimeterScale, frame.vSize / millimeterScale),
+                    depth: operation.through
+                        ? frame.maximumDepth / millimeterScale
+                        : Math.min(Number(operation.depth), frame.maximumDepth / millimeterScale),
+                });
+                event.preventDefault();
+            }
+
+            return;
+        }
+
         if (!helper) return;
 
         const operation = props.activePart?.operations?.find((item) => item.id === helper.userData.operationId);
@@ -772,9 +995,24 @@ const pointerDown = (event) => {
         if (!operation) return;
 
         emit('select-operation', operation.id);
+
+        if (operation.type === 'edge_roundover') {
+            event.preventDefault();
+            return;
+        }
+
         const dragPlane = new THREE.Plane();
-        const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
-        dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, helper.position);
+
+        if (['groove', 'plunge_route', 'drill'].includes(operation.type)) {
+            const frame = grooveFaceFrame(props.activePart, operation.face);
+            const surfaceCenter = frame.center.clone();
+            surfaceCenter.y += Number(props.activePart.dimensions.thickness) * millimeterScale / 2;
+            dragPlane.setFromNormalAndCoplanarPoint(frame.inward, surfaceCenter);
+        } else {
+            const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+            dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, helper.position);
+        }
+
         const startPoint = raycaster.ray.intersectPlane(dragPlane, new THREE.Vector3());
 
         if (!startPoint) return;
@@ -783,6 +1021,9 @@ const pointerDown = (event) => {
             operation: { ...operation },
             dragPlane,
             startPoint,
+            grooveHandle: helper.userData.grooveHandle ?? null,
+            plungeHandle: helper.userData.plungeHandle ?? null,
+            drillHandle: helper.userData.drillHandle ?? null,
         };
         controls.enabled = false;
         renderer.domElement.setPointerCapture(event.pointerId);
@@ -796,7 +1037,8 @@ const pointerDown = (event) => {
 
     const intersection = raycaster.intersectObjects(objectMeshes, false)[0];
 
-    emit('select-instance', intersection?.object.userData.instanceId ?? null);
+    const instanceId = intersection?.object.userData.instanceId ?? null;
+    emit('select-instance', lockedInstanceIdSet.value.has(instanceId) ? null : instanceId);
 };
 
 const cancelOperationToolHide = () => {
@@ -831,10 +1073,11 @@ const pointerMove = (event) => {
 
     if (props.mode === 'assembly' && transformState.value) {
         if (transformState.value.axis) {
+            transformState.value.numericInput = '';
             const value = transformState.value.mode === 'move'
                 ? moveValueFromPointer(event)
                 : rotationValueFromPointer(event);
-            applyTransformPreview(value);
+            applyTransformPreview(value, { snap: transformState.value.mode === 'move' && !event.ctrlKey });
         }
 
         return;
@@ -842,7 +1085,11 @@ const pointerMove = (event) => {
 
     if (!dragState) {
         if (props.mode === 'part') {
-            const hoveredHelper = rayFromEvent(event).intersectObjects(operationHelpers, false)[0]?.object;
+            const raycaster = rayFromEvent(event);
+            const hoveredHelper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
+            const hoveredStock = ['groove', 'edge_roundover', 'plunge_route', 'drill'].includes(selectedOperation.value?.type)
+                ? raycaster.intersectObjects(objectMeshes, false)[0]?.object
+                : null;
 
             if (hoveredHelper) {
                 cancelOperationToolHide();
@@ -851,7 +1098,9 @@ const pointerMove = (event) => {
                 scheduleOperationToolHide();
             }
 
-            renderer.domElement.style.cursor = hoveredHelper ? 'grab' : '';
+            renderer.domElement.style.cursor = hoveredHelper
+                ? ['groove', 'plunge_route', 'drill'].includes(selectedOperation.value?.type) ? 'grab' : 'pointer'
+                : hoveredStock ? 'pointer' : '';
         }
 
         return;
@@ -883,12 +1132,106 @@ const pointerMove = (event) => {
     }
 
     if (operation.type === 'groove') {
-        const alongLength = operation.direction === 'length';
-        const movementValue = (alongLength ? movement.z : movement.x) / millimeterScale;
-        const maximum = Number(alongLength ? dimensions.width : dimensions.length);
-        const halfWidth = Number(operation.width) / 2;
+        const frame = grooveFaceFrame(props.activePart, operation.face);
+        const movementU = movement.dot(frame.u) / millimeterScale;
+        const movementV = movement.dot(frame.v) / millimeterScale;
+
+        if (dragState.grooveHandle === 'body') {
+            const center = clampGrooveCenter(
+                operation,
+                frame,
+                Number(operation.center_u) + movementU,
+                Number(operation.center_v) + movementV,
+            );
+            emit('update-operation', operation.id, {
+                center_u: Math.round(center.center_u * 10) / 10,
+                center_v: Math.round(center.center_v * 10) / 10,
+            });
+            return;
+        }
+
+        const angle = THREE.MathUtils.degToRad(Number(operation.path_angle));
+        const halfLength = Number(operation.groove_length) / 2;
+        const directionU = Math.cos(angle) * halfLength;
+        const directionV = Math.sin(angle) * halfLength;
+        const start = { u: Number(operation.center_u) - directionU, v: Number(operation.center_v) - directionV };
+        const end = { u: Number(operation.center_u) + directionU, v: Number(operation.center_v) + directionV };
+        const movingPoint = dragState.grooveHandle === 'start' ? start : end;
+        const fixedPoint = dragState.grooveHandle === 'start' ? end : start;
+        const edgeMargin = Math.min(Number(operation.width) / 2, frame.uSize / millimeterScale / 2, frame.vSize / millimeterScale / 2);
+        const movedPoint = {
+            u: clamp(movingPoint.u + movementU, edgeMargin, frame.uSize / millimeterScale - edgeMargin),
+            v: clamp(movingPoint.v + movementV, edgeMargin, frame.vSize / millimeterScale - edgeMargin),
+        };
+        const nextStart = dragState.grooveHandle === 'start' ? movedPoint : fixedPoint;
+        const nextEnd = dragState.grooveHandle === 'start' ? fixedPoint : movedPoint;
+        const deltaU = nextEnd.u - nextStart.u;
+        const deltaV = nextEnd.v - nextStart.v;
+        const grooveLength = Math.max(Math.hypot(deltaU, deltaV), 0.1);
+        const pathAngle = THREE.MathUtils.radToDeg(Math.atan2(deltaV, deltaU));
+        const draftOperation = { ...operation, groove_length: grooveLength, path_angle: pathAngle };
+        const center = clampGrooveCenter(
+            draftOperation,
+            frame,
+            (nextStart.u + nextEnd.u) / 2,
+            (nextStart.v + nextEnd.v) / 2,
+        );
         emit('update-operation', operation.id, {
-            offset: Math.round(clamp(Number(operation.offset) + movementValue, halfWidth, maximum - halfWidth) * 10) / 10,
+            center_u: Math.round(center.center_u * 10) / 10,
+            center_v: Math.round(center.center_v * 10) / 10,
+            groove_length: Math.round(grooveLength * 10) / 10,
+            path_angle: Math.round(pathAngle * 10) / 10,
+        });
+    }
+
+    if (operation.type === 'plunge_route') {
+        const frame = grooveFaceFrame(props.activePart, operation.face);
+        const movementU = movement.dot(frame.u) / millimeterScale;
+        const movementV = movement.dot(frame.v) / millimeterScale;
+
+        if (dragState.plungeHandle !== 'end') {
+            const start = clampPlungeStart(
+                operation,
+                frame,
+                Number(operation.start_u) + movementU,
+                Number(operation.start_v) + movementV,
+            );
+            emit('update-operation', operation.id, {
+                start_u: Math.round(start.start_u * 10) / 10,
+                start_v: Math.round(start.start_v * 10) / 10,
+            });
+            return;
+        }
+
+        const angle = THREE.MathUtils.degToRad(Number(operation.path_angle));
+        const currentEndU = Number(operation.start_u) + Math.cos(angle) * Number(operation.travel_length);
+        const currentEndV = Number(operation.start_v) + Math.sin(angle) * Number(operation.travel_length);
+        const radius = Math.min(
+            plungeMaximumRadius(operation),
+            frame.uSize / millimeterScale / 2,
+            frame.vSize / millimeterScale / 2,
+        );
+        const endU = clamp(currentEndU + movementU, radius, frame.uSize / millimeterScale - radius);
+        const endV = clamp(currentEndV + movementV, radius, frame.vSize / millimeterScale - radius);
+        const deltaU = endU - Number(operation.start_u);
+        const deltaV = endV - Number(operation.start_v);
+        emit('update-operation', operation.id, {
+            path_angle: Math.round(THREE.MathUtils.radToDeg(Math.atan2(deltaV, deltaU)) * 10) / 10,
+            travel_length: Math.round(Math.max(Math.hypot(deltaU, deltaV), 0.1) * 10) / 10,
+        });
+    }
+
+    if (operation.type === 'drill') {
+        const frame = grooveFaceFrame(props.activePart, operation.face);
+        const center = clampDrillCenter(
+            operation,
+            frame,
+            Number(operation.center_u) + movement.dot(frame.u) / millimeterScale,
+            Number(operation.center_v) + movement.dot(frame.v) / millimeterScale,
+        );
+        emit('update-operation', operation.id, {
+            center_u: Math.round(center.center_u * 10) / 10,
+            center_v: Math.round(center.center_v * 10) / 10,
         });
     }
 };
@@ -955,7 +1298,7 @@ const positionOperationControls = () => {
 const adjustOperation = (field, delta) => {
     if (!selectedOperation.value || !(field in selectedOperation.value)) return;
 
-    const limit = field === 'miter_angle' ? 60 : 45;
+    const limit = field === 'path_angle' ? 180 : field === 'miter_angle' ? 60 : 45;
     emit('update-operation', selectedOperation.value.id, {
         [field]: clamp(Number(selectedOperation.value[field]) + delta, -limit, limit),
     });
@@ -1018,11 +1361,40 @@ const handleAssemblyTransformKey = (event) => {
     if (['x', 'y', 'z'].includes(key)) {
         selectTransformAxis(key);
         event.preventDefault();
+        return;
+    }
+
+    if (!transformState.value.axis) return;
+
+    if (event.key === 'Backspace') {
+        transformState.value.numericInput = transformState.value.numericInput.slice(0, -1);
+        const value = Number(transformState.value.numericInput);
+        applyTransformPreview(Number.isFinite(value) ? value : 0);
+        event.preventDefault();
+        return;
+    }
+
+    const character = event.key === ',' ? '.' : event.key;
+
+    if (/^[0-9.]$/.test(character) || (character === '-' && transformState.value.numericInput === '')) {
+        const nextInput = `${transformState.value.numericInput}${character}`;
+
+        if (nextInput === '-' || /^-?(?:\d+\.?\d*|\.\d*)$/.test(nextInput)) {
+            transformState.value.numericInput = nextInput;
+            const value = Number(nextInput);
+
+            if (Number.isFinite(value)) {
+                applyTransformPreview(value);
+            }
+        }
+
+        event.preventDefault();
     }
 };
 
 const keyDown = (event) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+    if (event.ctrlKey || event.metaKey) return;
 
     if (props.mode === 'assembly') {
         handleAssemblyTransformKey(event);
@@ -1043,6 +1415,9 @@ const keyDown = (event) => {
 
     if (event.shiftKey && selectedOperation.value.type === 'cross_cut') {
         adjustOperation('miter_angle', delta);
+        event.preventDefault();
+    } else if (event.shiftKey && selectedOperation.value.type === 'groove') {
+        adjustOperation('path_angle', delta);
         event.preventDefault();
     } else if (event.altKey && ['cross_cut', 'rip_cut'].includes(selectedOperation.value.type)) {
         adjustOperation('bevel_angle', delta);
@@ -1106,7 +1481,7 @@ onMounted(() => {
     render();
 });
 
-watch(() => [props.mode, props.parts, props.activePart, props.selectedInstanceId, props.selectedOperationId], rebuildObjects, { deep: true });
+watch(() => [props.mode, props.parts, props.activePart, props.selectedInstanceId, props.selectedOperationId, props.visibleInstanceIds, props.lockedInstanceIds], scheduleRebuildObjects, { deep: true });
 watch(() => props.selectedOperationId, () => {
     anglePanelOpen.value = false;
     hoveredOperationId.value = null;
@@ -1116,6 +1491,9 @@ watch(() => props.selectedOperationId, () => {
 
 onBeforeUnmount(() => {
     cancelAnimationFrame(animationFrame);
+    window.clearTimeout(rebuildTimer);
+    rebuildVersion++;
+    geometryWorker.dispose();
     resizeObserver?.disconnect();
     finishTransform(false);
     renderer?.domElement.removeEventListener('pointerdown', pointerDown);

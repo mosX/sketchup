@@ -19,3 +19,9 @@ Anchor the angle trigger just inside the plane's projected upper-right corner. U
 
 ## Keep the open cut editor stationary
 The closed trigger follows the selected cut plane, but once opened the cut editor must stay fixed at the viewport's upper-right corner. Do not project the open panel from changing geometry; angle and depth sliders must remain stationary while CSG previews rebuild.
+
+## Coalesce CSG rebuilds and reuse cutters
+Schedule reactive viewport rebuilds with a short trailing delay so slider events collapse into one CSG pass. Within each rebuild, construct each operation cutter once and clone it for subtraction/preview, then dispose the cache on the next rebuild and unmount. Only cross/rip cuts need a separate offcut CSG preview; groove and router cutters already visualize removed volume.
+
+## Snap modal moves and accept numeric deltas
+During G-axis movement, snap the selected bounding-box min/center/max to nearby instance anchors within 15 mm and show the target in the transform HUD; Ctrl temporarily disables snapping. After G/R then X/Y/Z, digit, minus, decimal point, and Backspace keys build an exact delta, and Enter commits it without snapping.

@@ -23,6 +23,12 @@ export const router = createRouter({
             meta: { title: 'Мои проекты', requiresAuth: true },
         },
         {
+            path: '/api-tokens',
+            name: 'api-tokens',
+            component: () => import('./pages/ApiTokens.vue'),
+            meta: { title: 'API-ключи', requiresAuth: true },
+        },
+        {
             path: '/projects/:id/editor',
             name: 'editor',
             component: () => import('./pages/Editor.vue'),
