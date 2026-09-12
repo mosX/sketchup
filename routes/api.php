@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\ApiTokenController;
 use App\Http\Controllers\Api\V1\CapabilityController;
+use App\Http\Controllers\Api\V1\ProjectAnalysisController;
 use App\Http\Controllers\Api\V1\ProjectCommandController;
 use App\Http\Controllers\Api\V1\ProjectSnapshotController;
 use App\Http\Controllers\Api\V1\ProjectValidationController;
@@ -9,7 +10,9 @@ use App\Http\Controllers\AssemblyGroupController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\PartDefinitionController;
 use App\Http\Controllers\PartInstanceController;
+use App\Http\Controllers\ProjectConnectionController;
 use App\Http\Controllers\ProjectController;
+use App\Http\Controllers\ProjectTemplateController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('throttle:5,1')->group(function (): void {
@@ -23,6 +26,10 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::apiResource('projects', ProjectController::class)->only('index');
     Route::apiResource('projects', ProjectController::class)->only('store')->middleware('token.project');
     Route::apiResource('projects', ProjectController::class)->only(['show', 'update', 'destroy'])->middleware('token.project');
+    Route::get('/project-templates', [ProjectTemplateController::class, 'index']);
+    Route::post('/project-templates', [ProjectTemplateController::class, 'store']);
+    Route::post('/project-templates/{projectTemplate}/instantiate', [ProjectTemplateController::class, 'instantiate']);
+    Route::delete('/project-templates/{projectTemplate}', [ProjectTemplateController::class, 'destroy']);
     Route::scopeBindings()->middleware('token.project')->group(function (): void {
         Route::apiResource('projects.parts', PartDefinitionController::class)
             ->parameters(['parts' => 'partDefinition']);
@@ -32,6 +39,13 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::apiResource('projects.assembly-groups', AssemblyGroupController::class)
             ->parameters(['assembly-groups' => 'assemblyGroup'])
             ->except('show');
+        Route::get('/projects/{project}/connections', [ProjectConnectionController::class, 'index']);
+        Route::post('/projects/{project}/connections', [ProjectConnectionController::class, 'store']);
+        Route::patch('/projects/{project}/connections/{projectConnection}', [ProjectConnectionController::class, 'update']);
+        Route::post('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'generateMachining']);
+        Route::delete('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'removeMachining']);
+        Route::delete('/projects/{project}/connections/{projectConnection}', [ProjectConnectionController::class, 'destroy']);
+        Route::get('/projects/{project}/analysis', ProjectAnalysisController::class);
     });
 });
 
@@ -46,6 +60,14 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
     Route::get('/projects', [ProjectController::class, 'index'])
         ->middleware('ability:projects:read,projects:write');
     Route::post('/projects', [ProjectController::class, 'store'])
+        ->middleware(['abilities:projects:write', 'token.project']);
+    Route::get('/project-templates', [ProjectTemplateController::class, 'index'])
+        ->middleware(['ability:projects:read,projects:write', 'token.project']);
+    Route::post('/project-templates', [ProjectTemplateController::class, 'store'])
+        ->middleware(['abilities:projects:write', 'token.project']);
+    Route::post('/project-templates/{projectTemplate}/instantiate', [ProjectTemplateController::class, 'instantiate'])
+        ->middleware(['abilities:projects:write', 'token.project']);
+    Route::delete('/project-templates/{projectTemplate}', [ProjectTemplateController::class, 'destroy'])
         ->middleware(['abilities:projects:write', 'token.project']);
 
     Route::scopeBindings()->middleware('token.project')->group(function (): void {
@@ -83,9 +105,24 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
         Route::delete('/projects/{project}/assembly-groups/{assemblyGroup}', [AssemblyGroupController::class, 'destroy'])
             ->middleware('abilities:projects:write');
 
+        Route::get('/projects/{project}/connections', [ProjectConnectionController::class, 'index'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::post('/projects/{project}/connections', [ProjectConnectionController::class, 'store'])
+            ->middleware('abilities:projects:write');
+        Route::patch('/projects/{project}/connections/{projectConnection}', [ProjectConnectionController::class, 'update'])
+            ->middleware('abilities:projects:write');
+        Route::post('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'generateMachining'])
+            ->middleware('abilities:projects:write');
+        Route::delete('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'removeMachining'])
+            ->middleware('abilities:projects:write');
+        Route::delete('/projects/{project}/connections/{projectConnection}', [ProjectConnectionController::class, 'destroy'])
+            ->middleware('abilities:projects:write');
+
         Route::post('/projects/{project}/commands', ProjectCommandController::class)
             ->middleware('abilities:projects:write');
         Route::post('/projects/{project}/validate', ProjectValidationController::class)
+            ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/analysis', ProjectAnalysisController::class)
             ->middleware('ability:projects:read,projects:write');
     });
 });

@@ -43,4 +43,28 @@ class ProjectValidationControllerTest extends TestCase
             ->assertJsonFragment(['code' => 'part_unused'])
             ->assertJsonFragment(['code' => 'instance_below_floor']);
     }
+
+    public function test_validation_bounds_include_instance_rotation(): void
+    {
+        $user = User::factory()->create();
+        $project = Project::factory()->for($user)->create();
+        $part = PartDefinition::factory()->for($project)->create([
+            'length' => 1000,
+            'width' => 100,
+            'thickness' => 50,
+        ]);
+        PartInstance::factory()->for($project)->for($part)->create([
+            'position_z' => 0,
+            'rotation_y' => 90,
+        ]);
+        Sanctum::actingAs($user, ['projects:read']);
+
+        $response = $this->postJson("/api/v1/projects/{$project->id}/validate");
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.summary.bounds.min.z', -475)
+            ->assertJsonPath('data.summary.bounds.max.z', 525)
+            ->assertJsonPath('data.summary.bounds_note', 'Bounds include instance rotation and are axis-aligned in project coordinates.');
+    }
 }

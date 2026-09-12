@@ -51,4 +51,9 @@ class Project extends Model
     {
         return $this->hasMany(AssemblyGroup::class);
     }
+
+    public function projectConnections(): HasMany
+    {
+        return $this->hasMany(ProjectConnection::class);
+    }
 }

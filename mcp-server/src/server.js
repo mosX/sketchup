@@ -16,6 +16,42 @@ const tools = [
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     {
+        name: 'woodworking_list_project_templates',
+        description: 'List reusable parametric woodworking project templates available to the configured global API key.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+        name: 'woodworking_save_project_template',
+        description: 'Capture a complete project as a reusable parametric template.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                name: { type: 'string', minLength: 1, maxLength: 255 },
+                description: { type: 'string', maxLength: 5000 },
+            },
+            required: ['project_id', 'name'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_instantiate_project_template',
+        description: 'Create a project from a template with independent X width, Y depth, and Z height dimensions.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                template_id: { type: 'integer', minimum: 1 },
+                name: { type: 'string', minLength: 1, maxLength: 255 },
+                description: { type: 'string', maxLength: 5000 },
+                width: { type: 'number', minimum: 1, maximum: 100000 },
+                depth: { type: 'number', minimum: 1, maximum: 100000 },
+                height: { type: 'number', minimum: 1, maximum: 100000 },
+            },
+            required: ['template_id', 'name', 'width', 'depth', 'height'],
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'woodworking_create_project',
         description: 'Create an empty woodworking project and return its initial revision.',
         inputSchema: {
@@ -39,8 +75,126 @@ const tools = [
         inputSchema: projectIdSchema(),
     },
     {
+        name: 'woodworking_analyze_project',
+        description: 'Get rotated-bounds diagnostics, review items, a bill of materials, and preliminary linear and sheet cutting maps.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                kerf_mm: { type: 'number', minimum: 0, maximum: 20 },
+                edge_margin_mm: { type: 'number', minimum: 0, maximum: 500 },
+                linear_stock_length_mm: { type: 'number', minimum: 100, maximum: 50000 },
+                sheet_length_mm: { type: 'number', minimum: 100, maximum: 10000 },
+                sheet_width_mm: { type: 'number', minimum: 100, maximum: 10000 },
+            },
+            required: ['project_id'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_list_connections',
+        description: 'List semantic woodworking connections between project instances.',
+        inputSchema: projectIdSchema(),
+    },
+    {
+        name: 'woodworking_create_connection',
+        description: 'Connect two instances with a butt, half-lap, mortise-and-tenon, or dowel joint.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                primary_instance_id: { type: 'integer', minimum: 1 },
+                secondary_instance_id: { type: 'integer', minimum: 1 },
+                type: { enum: ['butt', 'half_lap', 'mortise_tenon', 'dowel'] },
+                label: { type: 'string', maxLength: 255 },
+                note: { type: 'string', maxLength: 5000 },
+                parameters: { type: 'object', additionalProperties: true },
+            },
+            required: ['project_id', 'primary_instance_id', 'secondary_instance_id', 'type'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_update_connection',
+        description: 'Update connection metadata or face-local placement parameters. Changing placement marks generated machining as outdated.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                connection_id: { type: 'integer', minimum: 1 },
+                label: { type: ['string', 'null'], maxLength: 255 },
+                note: { type: ['string', 'null'], maxLength: 5000 },
+                is_verified: { type: 'boolean' },
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        primary_face: { enum: ['top', 'bottom', 'left', 'right', 'start', 'end'] },
+                        secondary_face: { enum: ['top', 'bottom', 'left', 'right', 'start', 'end'] },
+                        primary_center_u: { type: 'number', minimum: 0, maximum: 100000 },
+                        primary_center_v: { type: 'number', minimum: 0, maximum: 100000 },
+                        secondary_center_u: { type: 'number', minimum: 0, maximum: 100000 },
+                        secondary_center_v: { type: 'number', minimum: 0, maximum: 100000 },
+                        joint_angle: { type: 'number', minimum: -180, maximum: 180 },
+                        joint_length: { type: 'number', minimum: 0.1, maximum: 100000 },
+                        joint_width: { type: 'number', minimum: 0.1, maximum: 10000 },
+                        depth_ratio: { type: 'number', minimum: 0.1, maximum: 0.9 },
+                        tenon_width: { type: 'number', minimum: 0.1, maximum: 10000 },
+                        tenon_thickness: { type: 'number', minimum: 0.1, maximum: 10000 },
+                        tenon_length: { type: 'number', minimum: 0.1, maximum: 10000 },
+                        dowel_diameter: { type: 'number', minimum: 0.1, maximum: 100 },
+                        dowel_count: { type: 'integer', minimum: 1, maximum: 100 },
+                        dowel_depth: { type: 'number', minimum: 0.1, maximum: 1000 },
+                        dowel_spacing: { type: 'number', minimum: 0.1, maximum: 10000 },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['project_id', 'connection_id'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_delete_connection',
+        description: 'Delete a woodworking connection from a project.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                connection_id: { type: 'integer', minimum: 1 },
+            },
+            required: ['project_id', 'connection_id'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_generate_connection_machining',
+        description: 'Generate applied machining operations for both parts of a semantic connection. Shared part definitions are split automatically.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                connection_id: { type: 'integer', minimum: 1 },
+            },
+            required: ['project_id', 'connection_id'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'woodworking_remove_connection_machining',
+        description: 'Remove operations generated by a connection and return it to pending machining state.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                project_id: { type: 'integer', minimum: 1 },
+                connection_id: { type: 'integer', minimum: 1 },
+            },
+            required: ['project_id', 'connection_id'],
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'woodworking_apply_commands',
-        description: 'Atomically preview or commit a batch of part and instance commands. Use dry_run=true first, then repeat with dry_run=false and the current revision.',
+        description: 'Atomically preview or commit a batch of part, assembly-group, and instance commands. Use dry_run=true first, then repeat with dry_run=false and the current revision.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -54,12 +208,27 @@ const tools = [
                     items: {
                         type: 'object',
                         properties: {
-                            type: { enum: ['create_part', 'create_instance', 'transform_instance', 'delete_instance'] },
+                            type: {
+                                enum: [
+                                    'create_part',
+                                    'create_instance',
+                                    'transform_instance',
+                                    'delete_instance',
+                                    'create_group',
+                                    'update_group',
+                                    'delete_group',
+                                    'assign_instance_to_group',
+                                ],
+                            },
                             temporary_id: { type: 'string', maxLength: 100 },
                             part_id: { type: 'integer', minimum: 1 },
                             part_ref: { type: 'string', maxLength: 100 },
                             instance_id: { type: 'integer', minimum: 1 },
                             instance_ref: { type: 'string', maxLength: 100 },
+                            group_id: { type: 'integer', minimum: 1 },
+                            group_ref: { type: 'string', maxLength: 100 },
+                            parent_group_id: { type: 'integer', minimum: 1 },
+                            parent_group_ref: { type: 'string', maxLength: 100 },
                             data: { type: 'object' },
                         },
                         required: ['type'],
@@ -185,6 +354,24 @@ async function executeTool(name, args) {
         return apiRequest('/projects');
     }
 
+    if (name === 'woodworking_list_project_templates') {
+        return apiRequest('/project-templates');
+    }
+
+    if (name === 'woodworking_save_project_template') {
+        return apiRequest('/project-templates', { method: 'POST', body: args });
+    }
+
+    if (name === 'woodworking_instantiate_project_template') {
+        const templateId = integerArgument(args, 'template_id');
+        const { template_id: ignoredTemplateId, width, depth, height, ...project } = args;
+
+        return apiRequest(`/project-templates/${templateId}/instantiate`, {
+            method: 'POST',
+            body: { ...project, dimensions: { width, depth, height } },
+        });
+    }
+
     if (name === 'woodworking_create_project') {
         return apiRequest('/projects', { method: 'POST', body: args });
     }
@@ -195,6 +382,55 @@ async function executeTool(name, args) {
 
     if (name === 'woodworking_validate_project') {
         return apiRequest(`/projects/${integerArgument(args, 'project_id')}/validate`, { method: 'POST' });
+    }
+
+    if (name === 'woodworking_analyze_project') {
+        const projectId = integerArgument(args, 'project_id');
+        const query = new URLSearchParams(Object.entries(args)
+            .filter(([key, value]) => key !== 'project_id' && value !== undefined)
+            .map(([key, value]) => [key, String(value)]));
+
+        return apiRequest(`/projects/${projectId}/analysis${query.size ? `?${query}` : ''}`);
+    }
+
+    if (name === 'woodworking_list_connections') {
+        return apiRequest(`/projects/${integerArgument(args, 'project_id')}/connections`);
+    }
+
+    if (name === 'woodworking_create_connection') {
+        const projectId = integerArgument(args, 'project_id');
+        const { project_id: ignoredProjectId, ...body } = args;
+
+        return apiRequest(`/projects/${projectId}/connections`, { method: 'POST', body });
+    }
+
+    if (name === 'woodworking_update_connection') {
+        const projectId = integerArgument(args, 'project_id');
+        const connectionId = integerArgument(args, 'connection_id');
+        const { project_id: ignoredProjectId, connection_id: ignoredConnectionId, ...body } = args;
+
+        return apiRequest(`/projects/${projectId}/connections/${connectionId}`, { method: 'PATCH', body });
+    }
+
+    if (name === 'woodworking_delete_connection') {
+        const projectId = integerArgument(args, 'project_id');
+        const connectionId = integerArgument(args, 'connection_id');
+
+        return apiRequest(`/projects/${projectId}/connections/${connectionId}`, { method: 'DELETE' });
+    }
+
+    if (name === 'woodworking_generate_connection_machining') {
+        const projectId = integerArgument(args, 'project_id');
+        const connectionId = integerArgument(args, 'connection_id');
+
+        return apiRequest(`/projects/${projectId}/connections/${connectionId}/machining`, { method: 'POST' });
+    }
+
+    if (name === 'woodworking_remove_connection_machining') {
+        const projectId = integerArgument(args, 'project_id');
+        const connectionId = integerArgument(args, 'connection_id');
+
+        return apiRequest(`/projects/${projectId}/connections/${connectionId}/machining`, { method: 'DELETE' });
     }
 
     if (name === 'woodworking_apply_commands') {

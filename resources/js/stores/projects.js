@@ -7,6 +7,8 @@ export const useProjectsStore = defineStore('projects', {
         activeProject: null,
         parts: [],
         assemblyGroups: [],
+        templates: [],
+        connections: [],
         loading: false,
     }),
 
@@ -20,6 +22,32 @@ export const useProjectsStore = defineStore('projects', {
             } finally {
                 this.loading = false;
             }
+        },
+
+        async fetchProjectTemplates() {
+            const { data } = await axios.get('/project-templates');
+            this.templates = data.data;
+
+            return this.templates;
+        },
+
+        async createProjectTemplate(payload) {
+            const { data } = await axios.post('/project-templates', payload);
+            this.templates.unshift(data.data);
+
+            return data.data;
+        },
+
+        async instantiateProjectTemplate(templateId, payload) {
+            const { data } = await axios.post(`/project-templates/${templateId}/instantiate`, payload);
+            this.items.unshift(data.data);
+
+            return data.data;
+        },
+
+        async deleteProjectTemplate(templateId) {
+            await axios.delete(`/project-templates/${templateId}`);
+            this.templates = this.templates.filter((template) => template.id !== templateId);
         },
 
         async fetchProject(id) {
@@ -65,6 +93,58 @@ export const useProjectsStore = defineStore('projects', {
             this.assemblyGroups = data.data;
 
             return this.assemblyGroups;
+        },
+
+        async fetchProjectConnections(projectId) {
+            const { data } = await axios.get(`/projects/${projectId}/connections`);
+            this.connections = data.data;
+
+            return this.connections;
+        },
+
+        async createProjectConnection(projectId, payload) {
+            const { data } = await axios.post(`/projects/${projectId}/connections`, payload);
+            this.connections.unshift(data.data);
+
+            return data.data;
+        },
+
+        async updateProjectConnection(projectId, connectionId, payload) {
+            const { data } = await axios.patch(`/projects/${projectId}/connections/${connectionId}`, payload);
+            const index = this.connections.findIndex((connection) => connection.id === connectionId);
+
+            if (index !== -1) this.connections[index] = data.data;
+
+            return data.data;
+        },
+
+        async generateProjectConnectionMachining(projectId, connectionId) {
+            const { data } = await axios.post(`/projects/${projectId}/connections/${connectionId}/machining`);
+            const index = this.connections.findIndex((connection) => connection.id === connectionId);
+
+            if (index !== -1) this.connections[index] = data.data;
+
+            return data.data;
+        },
+
+        async removeProjectConnectionMachining(projectId, connectionId) {
+            const { data } = await axios.delete(`/projects/${projectId}/connections/${connectionId}/machining`);
+            const index = this.connections.findIndex((connection) => connection.id === connectionId);
+
+            if (index !== -1) this.connections[index] = data.data;
+
+            return data.data;
+        },
+
+        async deleteProjectConnection(projectId, connectionId) {
+            await axios.delete(`/projects/${projectId}/connections/${connectionId}`);
+            this.connections = this.connections.filter((connection) => connection.id !== connectionId);
+        },
+
+        async fetchProjectAnalysis(projectId, settings = {}) {
+            const { data } = await axios.get(`/projects/${projectId}/analysis`, { params: settings });
+
+            return data.data;
         },
 
         async createAssemblyGroup(projectId, payload) {
@@ -140,6 +220,9 @@ export const useProjectsStore = defineStore('projects', {
 
         async deleteInstance(projectId, instanceId) {
             await axios.delete(`/projects/${projectId}/instances/${instanceId}`);
+            this.connections = this.connections.filter((connection) => (
+                connection.primary_instance_id !== instanceId && connection.secondary_instance_id !== instanceId
+            ));
 
             for (const part of this.parts) {
                 part.instances = part.instances.filter((instance) => instance.id !== instanceId);

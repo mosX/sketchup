@@ -15,7 +15,7 @@ class CapabilityController extends Controller
         return response()->json([
             'data' => [
                 'api_version' => 'v1',
-                'schema_version' => 4,
+                'schema_version' => 10,
                 'coordinate_system' => [
                     'units' => 'millimeters',
                     'angles' => 'degrees',
@@ -39,6 +39,29 @@ class CapabilityController extends Controller
                     'instances_reference_group_by' => 'assembly_group_id',
                     'supports_nested_groups' => true,
                     'delete_contents_is_explicit' => true,
+                ],
+                'project_analysis' => [
+                    'diagnostics' => ['warnings', 'review_items', 'rotated_bounds'],
+                    'manufacturing' => ['bill_of_materials', 'linear_cutting', 'sheet_cutting'],
+                    'cutting_settings' => ['kerf_mm', 'edge_margin_mm', 'linear_stock_length_mm', 'sheet_length_mm', 'sheet_width_mm'],
+                    'cutting_map_is_preliminary' => true,
+                ],
+                'project_templates' => [
+                    'parameters' => ['width_x', 'depth_y', 'height_z'],
+                    'preserves' => ['part_operations', 'assembly_groups', 'instance_rotations'],
+                    'splits_part_variants_for_non_uniform_scaling' => true,
+                ],
+                'connections' => [
+                    'types' => ['butt', 'half_lap', 'mortise_tenon', 'dowel'],
+                    'links' => ['primary_instance_id', 'secondary_instance_id'],
+                    'supports_verification' => true,
+                    'supports_machining_generation' => true,
+                    'machining_statuses' => ['pending', 'generated', 'not_required'],
+                    'generated_operations_are_applied' => true,
+                    'shared_parts_are_split_before_machining' => true,
+                    'placement_parameters' => ['primary_center_u', 'primary_center_v', 'secondary_center_u', 'secondary_center_v', 'joint_angle'],
+                    'supports_machining_regeneration' => true,
+                    'supports_machining_reset' => true,
                 ],
                 'part_operations' => [
                     'cross_cut' => ['position', 'miter_angle', 'bevel_angle', 'kerf', 'cut_depth', 'cut_direction', 'keep_side'],

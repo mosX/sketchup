@@ -62,6 +62,7 @@
             </div>
         </div>
         <div v-if="selectedOperation" class="offcut-legend"><i></i> Полупрозрачная часть будет удалена</div>
+        <div v-if="mode === 'assembly' && connections.length" class="absolute bottom-4 right-20 z-2 rounded-lg border border-emerald-900/10 bg-white/80 px-3 py-2 text-[10px] text-stone-500 backdrop-blur"><span class="mr-1 text-amber-600">◆</span>Столярные соединения: {{ connections.length }}</div>
         <div v-if="transformState" class="scene-transform-hud">
             <div>
                 <strong>{{ transformModeLabel }}</strong>
@@ -73,6 +74,16 @@
             <p v-else-if="transformState.snap" class="text-emerald-300">Привязка: <b>{{ transformState.snap.label }}</b></p>
             <small>Введите число для точного значения · Ctrl — без привязки · Shift — точно</small>
             <small>ЛКМ / Enter — применить · Esc / ПКМ — отменить</small>
+        </div>
+        <div v-if="measurementTool" class="absolute bottom-12 left-1/2 z-4 min-w-72 -translate-x-1/2 rounded-xl border border-emerald-900/15 bg-white/95 px-4 py-3 text-center shadow-xl backdrop-blur">
+            <div class="flex items-center justify-center gap-2 text-xs font-bold text-emerald-950">
+                <span>{{ measurementTool === 'angle' ? 'Измерение угла' : 'Измерение расстояния' }}</span>
+                <span class="rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] text-emerald-800">{{ measurementPoints.length }}/{{ measurementTool === 'angle' ? 3 : 2 }}</span>
+            </div>
+            <p v-if="measurementResult?.type === 'distance'" class="mt-1 font-mono text-sm font-bold text-stone-700">{{ measurementResult.distance.toFixed(1) }} мм</p>
+            <p v-else-if="measurementResult?.type === 'angle'" class="mt-1 font-mono text-sm font-bold text-stone-700">{{ measurementResult.angle.toFixed(1) }}°</p>
+            <p v-if="measurementResult?.type === 'distance'" class="mt-1 text-[10px] text-stone-500">ΔX {{ measurementResult.delta.x.toFixed(1) }} · ΔY {{ measurementResult.delta.y.toFixed(1) }} · ΔZ {{ measurementResult.delta.z.toFixed(1) }} мм</p>
+            <p v-else class="mt-1 text-[10px] text-stone-500">Кликайте по поверхности: {{ measurementTool === 'angle' ? 'точка луча — вершина — точка луча' : 'начальная — конечная точка' }}.</p>
         </div>
         <div class="viewport-hint">СКМ / Alt+ЛКМ — вращение · Колесо — масштаб · ПКМ — перемещение</div>
         <div class="axis-widget" aria-hidden="true"><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div>
@@ -99,6 +110,7 @@ import {
 } from '../editor/geometry/coordinates.js';
 import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/geometry/cutters.js';
 import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
+import { connectionFacePlacement, connectionOperationPlan } from '../editor/connections.js';
 
 const props = defineProps({
     mode: { type: String, default: 'assembly' },
@@ -108,15 +120,28 @@ const props = defineProps({
     selectedOperationId: { type: String, default: null },
     visibleInstanceIds: { type: Array, default: null },
     lockedInstanceIds: { type: Array, default: () => [] },
+    ghostedInstanceIds: { type: Array, default: () => [] },
+    explodeDistance: { type: Number, default: 0 },
+    focusedInstanceIds: { type: Array, default: () => [] },
+    focusRequestId: { type: Number, default: 0 },
+    measurementTool: { type: String, default: null },
+    measurementResetId: { type: Number, default: 0 },
+    sectionAxis: { type: String, default: null },
+    sectionOffset: { type: Number, default: 0 },
+    sectionInverted: { type: Boolean, default: false },
+    connections: { type: Array, default: () => [] },
+    selectedConnectionId: { type: Number, default: null },
 });
 
-const emit = defineEmits(['select-instance', 'select-operation', 'update-operation', 'commit-instance-transform']);
+const emit = defineEmits(['select-instance', 'select-operation', 'select-connection', 'update-operation', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform']);
 const viewport = ref(null);
 const operationControls = ref(null);
 const anglePanelOpen = ref(false);
 const hoveredOperationId = ref(null);
 const operationToolHovered = ref(false);
 const transformState = ref(null);
+const measurementPoints = ref([]);
+const measurementResult = ref(null);
 const editorAxisDirections = {
     x: new THREE.Vector3(1, 0, 0),
     y: new THREE.Vector3(0, 0, 1),
@@ -146,6 +171,9 @@ let objectsGroup;
 let dragState = null;
 let hoverClearTimer = null;
 let transformGuide = null;
+let measurementGroup = null;
+let sectionHelper = null;
+let connectionsGroup = null;
 let hasPointerPosition = false;
 let rebuildTimer = null;
 let rebuildVersion = 0;
@@ -153,6 +181,8 @@ let rebuildVersion = 0;
 const selectedOperation = computed(() => props.activePart?.operations?.find((operation) => operation.id === props.selectedOperationId) ?? null);
 const visibleInstanceIdSet = computed(() => props.visibleInstanceIds === null ? null : new Set(props.visibleInstanceIds));
 const lockedInstanceIdSet = computed(() => new Set(props.lockedInstanceIds));
+const ghostedInstanceIdSet = computed(() => new Set(props.ghostedInstanceIds));
+const focusedInstanceIdSet = computed(() => new Set(props.focusedInstanceIds));
 const angleCapableOperation = computed(() => ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type));
 const operationToolVisible = computed(() => anglePanelOpen.value || operationToolHovered.value || hoveredOperationId.value === props.selectedOperationId);
 const selectedOperationLabel = computed(() => ({
@@ -188,6 +218,294 @@ const applyInstanceTransform = (mesh, part, position, rotation) => {
         .multiply(editorRotationMatrix)
         .multiply(editorToSceneBasis);
     mesh.quaternion.setFromRotationMatrix(sceneRotationMatrix);
+    mesh.userData.basePosition = mesh.position.clone();
+};
+
+const applyExplodedPositions = () => {
+    const assemblyMeshes = objectMeshes.filter((mesh) => mesh.userData.instanceId !== null && mesh.userData.basePosition);
+    const distance = Math.max(0, Number(props.explodeDistance)) * millimeterScale;
+
+    if (!assemblyMeshes.length) return;
+
+    const center = assemblyMeshes.reduce(
+        (sum, mesh) => sum.add(mesh.userData.basePosition),
+        new THREE.Vector3(),
+    ).divideScalar(assemblyMeshes.length);
+
+    assemblyMeshes.forEach((mesh) => {
+        mesh.position.copy(mesh.userData.basePosition);
+
+        if (distance === 0) return;
+
+        const direction = mesh.userData.basePosition.clone().sub(center);
+
+        if (direction.lengthSq() < 0.000001) {
+            const angle = (Number(mesh.userData.instanceId) * 2.399963) % (Math.PI * 2);
+            direction.set(Math.cos(angle), 0.45, Math.sin(angle));
+        }
+
+        direction.normalize();
+        mesh.position.addScaledVector(direction, distance);
+    });
+    updateConnectionHelpers();
+};
+
+const connectionColor = (type) => ({
+    butt: '#64748b',
+    half_lap: '#0f766e',
+    mortise_tenon: '#b45309',
+    dowel: '#7c3aed',
+}[type] ?? '#64748b');
+
+const clearConnectionHelpers = () => {
+    if (!connectionsGroup) return;
+
+    connectionsGroup.children.slice().forEach((object) => {
+        object.geometry?.dispose();
+        object.material?.dispose();
+        connectionsGroup.remove(object);
+    });
+};
+
+const connectionPoint = (connection, role, mesh) => {
+    const part = mesh.userData.part;
+    const placement = connectionFacePlacement(connection, part, role);
+    const frame = grooveFaceFrame(part, placement.face);
+    const localPoint = frame.center.clone()
+        .addScaledVector(frame.u, (placement.center.u - placement.surface.u / 2) * millimeterScale)
+        .addScaledVector(frame.v, (placement.center.v - placement.surface.v / 2) * millimeterScale);
+    mesh.updateWorldMatrix(true, false);
+
+    return { ...placement, frame, point: mesh.localToWorld(localPoint) };
+};
+
+const addConnectionMachiningPreview = (connection) => {
+    if (!['pending', 'outdated'].includes(connection.machining_status)) return;
+
+    connectionOperationPlan(connection, props.parts).forEach(({ instance, operations, part }) => {
+        const mesh = objectMeshes.find((candidate) => candidate.userData.instanceId === instance.id);
+
+        if (!mesh) return;
+
+        mesh.updateWorldMatrix(true, false);
+        operations.forEach((operation) => {
+            const preview = operationPreviewObject(part, operation);
+
+            if (!preview) return;
+
+            preview.applyMatrix4(mesh.matrixWorld);
+            preview.material = new THREE.MeshBasicMaterial({
+                color: '#ef4444',
+                transparent: true,
+                opacity: 0.28,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+            });
+            preview.userData.connectionId = connection.id;
+            preview.userData.connectionPreview = true;
+            preview.renderOrder = 5;
+            connectionsGroup.add(preview);
+        });
+    });
+};
+
+const updateConnectionHelpers = () => {
+    if (!connectionsGroup) return;
+
+    clearConnectionHelpers();
+
+    if (props.mode !== 'assembly') return;
+
+    props.connections.forEach((connection) => {
+        const primary = objectMeshes.find((mesh) => mesh.userData.instanceId === connection.primary_instance_id);
+        const secondary = objectMeshes.find((mesh) => mesh.userData.instanceId === connection.secondary_instance_id);
+
+        if (!primary || !secondary) return;
+
+        const selected = connection.id === props.selectedConnectionId;
+        const color = selected ? '#dc2626' : connectionColor(connection.type);
+        const primaryPlacement = connectionPoint(connection, 'primary', primary);
+        const secondaryPlacement = connectionPoint(connection, 'secondary', secondary);
+        const points = [primaryPlacement.point, secondaryPlacement.point];
+        const line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(points),
+            new THREE.LineDashedMaterial({ color, dashSize: 0.12, gapSize: 0.07, depthTest: false }),
+        );
+        line.computeLineDistances();
+        line.userData.connectionId = connection.id;
+        line.renderOrder = 6;
+        connectionsGroup.add(line);
+
+        ['primary', 'secondary'].forEach((role, index) => {
+            const marker = new THREE.Mesh(
+                new THREE.OctahedronGeometry(selected ? 0.09 : 0.065),
+                new THREE.MeshBasicMaterial({ color, depthTest: false }),
+            );
+            marker.position.copy(points[index]);
+            marker.userData.connectionId = connection.id;
+            marker.userData.connectionRole = role;
+            marker.renderOrder = 7;
+            connectionsGroup.add(marker);
+        });
+
+        if (selected) addConnectionMachiningPreview(connection);
+    });
+};
+
+const focusInstances = () => {
+    if (!camera || !controls || focusedInstanceIdSet.value.size === 0) return;
+
+    const meshes = objectMeshes.filter((mesh) => focusedInstanceIdSet.value.has(mesh.userData.instanceId));
+
+    if (!meshes.length) return;
+
+    const bounds = meshes.reduce(
+        (box, mesh) => box.union(new THREE.Box3().setFromObject(mesh)),
+        new THREE.Box3(),
+    );
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() / 2, 0.35);
+    const direction = camera.position.clone().sub(controls.target).normalize();
+
+    controls.target.copy(center);
+    camera.position.copy(center).addScaledVector(direction, Math.max(radius * 2.6, 1.4));
+    camera.near = Math.max(radius / 100, 0.01);
+    camera.far = Math.max(radius * 100, 1000);
+    camera.updateProjectionMatrix();
+    controls.update();
+};
+
+const sectionNormal = () => ({
+    x: new THREE.Vector3(1, 0, 0),
+    y: new THREE.Vector3(0, 0, 1),
+    z: new THREE.Vector3(0, 1, 0),
+}[props.sectionAxis] ?? null);
+
+const updateSection = () => {
+    if (!scene) return;
+
+    if (sectionHelper) {
+        scene.remove(sectionHelper);
+        sectionHelper.geometry.dispose();
+        sectionHelper.material.dispose();
+        sectionHelper = null;
+    }
+
+    const baseNormal = sectionNormal();
+
+    if (baseNormal) {
+        const normal = baseNormal.clone().multiplyScalar(props.sectionInverted ? -1 : 1);
+        const point = baseNormal.clone().multiplyScalar(Number(props.sectionOffset) * millimeterScale);
+        const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point);
+        const material = new THREE.MeshBasicMaterial({
+            color: '#d97706',
+            opacity: 0.12,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+        });
+        sectionHelper = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), material);
+        sectionHelper.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), baseNormal);
+        sectionHelper.position.copy(point);
+        sectionHelper.renderOrder = 3;
+        scene.add(sectionHelper);
+
+        objectMeshes.forEach((mesh) => {
+            mesh.material.clippingPlanes = [plane];
+            mesh.material.needsUpdate = true;
+
+            if (mesh.userData.edges) {
+                mesh.userData.edges.material.clippingPlanes = [plane];
+                mesh.userData.edges.material.needsUpdate = true;
+            }
+        });
+
+        return;
+    }
+
+    objectMeshes.forEach((mesh) => {
+        mesh.material.clippingPlanes = [];
+        mesh.material.needsUpdate = true;
+
+        if (mesh.userData.edges) {
+            mesh.userData.edges.material.clippingPlanes = [];
+            mesh.userData.edges.material.needsUpdate = true;
+        }
+    });
+};
+
+const clearMeasurement = () => {
+    measurementPoints.value = [];
+    measurementResult.value = null;
+
+    if (!measurementGroup) return;
+
+    measurementGroup.children.slice().forEach((object) => {
+        object.geometry?.dispose();
+        object.material?.dispose();
+        measurementGroup.remove(object);
+    });
+};
+
+const drawMeasurement = () => {
+    if (!measurementGroup) return;
+
+    measurementGroup.children.slice().forEach((object) => {
+        object.geometry?.dispose();
+        object.material?.dispose();
+        measurementGroup.remove(object);
+    });
+
+    measurementPoints.value.forEach((point) => {
+        const marker = new THREE.Mesh(
+            new THREE.SphereGeometry(0.045, 16, 12),
+            new THREE.MeshBasicMaterial({ color: '#f59e0b', depthTest: false }),
+        );
+        marker.position.copy(point);
+        marker.renderOrder = 5;
+        measurementGroup.add(marker);
+    });
+
+    if (measurementPoints.value.length > 1) {
+        const line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints(measurementPoints.value),
+            new THREE.LineBasicMaterial({ color: '#d97706', depthTest: false }),
+        );
+        line.renderOrder = 5;
+        measurementGroup.add(line);
+    }
+};
+
+const addMeasurementPoint = (point) => {
+    const requiredPoints = props.measurementTool === 'angle' ? 3 : 2;
+
+    if (measurementPoints.value.length >= requiredPoints) {
+        clearMeasurement();
+    }
+
+    measurementPoints.value = [...measurementPoints.value, point.clone()];
+    drawMeasurement();
+
+    if (props.measurementTool === 'distance' && measurementPoints.value.length === 2) {
+        const delta = measurementPoints.value[1].clone().sub(measurementPoints.value[0]);
+        measurementResult.value = {
+            type: 'distance',
+            distance: delta.length() / millimeterScale,
+            delta: {
+                x: Math.abs(delta.x / millimeterScale),
+                y: Math.abs(delta.z / millimeterScale),
+                z: Math.abs(delta.y / millimeterScale),
+            },
+        };
+    } else if (props.measurementTool === 'angle' && measurementPoints.value.length === 3) {
+        const first = measurementPoints.value[0].clone().sub(measurementPoints.value[1]);
+        const second = measurementPoints.value[2].clone().sub(measurementPoints.value[1]);
+        measurementResult.value = {
+            type: 'angle',
+            angle: THREE.MathUtils.radToDeg(first.angleTo(second)),
+        };
+    }
 };
 const transformModeLabel = computed(() => transformState.value?.mode === 'move' ? 'Перемещение' : 'Вращение');
 const transformValueLabel = computed(() => {
@@ -423,6 +741,7 @@ const createOperationPreviews = (part) => {
 };
 
 const clearObjects = () => {
+    clearConnectionHelpers();
     objectMeshes.splice(0);
     operationHelpers.splice(0);
     objectsGroup.children.slice().forEach((object) => {
@@ -434,12 +753,36 @@ const clearObjects = () => {
     });
 };
 
+const updateMeshAppearance = (mesh, isSelected) => {
+    const isGhosted = ghostedInstanceIdSet.value.has(mesh.userData.instanceId);
+    const isFocusDimmed = focusedInstanceIdSet.value.size > 0
+        && mesh.userData.instanceId !== null
+        && !focusedInstanceIdSet.value.has(mesh.userData.instanceId);
+    const isTransparent = isGhosted || isFocusDimmed;
+    const edges = mesh.userData.edges;
+
+    mesh.material.emissive.set(isSelected ? '#315f4a' : '#000000');
+    mesh.material.emissiveIntensity = isSelected ? 0.24 : 0;
+    mesh.material.transparent = isTransparent;
+    mesh.material.opacity = isFocusDimmed ? 0.07 : isGhosted ? 0.2 : 1;
+    mesh.material.depthWrite = !isTransparent;
+    mesh.material.needsUpdate = true;
+    mesh.renderOrder = isTransparent ? 1 : 0;
+
+    if (edges) {
+        edges.material.color.set(isSelected ? '#173d30' : '#6f5235');
+        edges.material.transparent = isTransparent;
+        edges.material.opacity = isFocusDimmed ? 0.08 : isGhosted ? 0.32 : 1;
+        edges.material.needsUpdate = true;
+    }
+};
+
 const createMesh = (part, geometry, instance = null) => {
     const isSelected = instance?.id === props.selectedInstanceId;
     const material = new THREE.MeshStandardMaterial({
         color: palette[part.id % palette.length],
-        emissive: isSelected ? '#315f4a' : '#000000',
-        emissiveIntensity: isSelected ? 0.24 : 0,
+        emissive: '#000000',
+        emissiveIntensity: 0,
         roughness: 0.72,
     });
     const mesh = new THREE.Mesh(geometry, material);
@@ -447,12 +790,15 @@ const createMesh = (part, geometry, instance = null) => {
     mesh.receiveShadow = true;
     mesh.userData.instanceId = instance?.id ?? null;
     mesh.userData.partName = part.name;
+    mesh.userData.part = part;
 
     const edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
         new THREE.LineBasicMaterial({ color: isSelected ? '#173d30' : '#6f5235' }),
     );
+    mesh.userData.edges = edges;
     mesh.add(edges);
+    updateMeshAppearance(mesh, isSelected);
 
     if (instance) {
         applyInstanceTransform(mesh, part, instance.position, instance.rotation);
@@ -507,6 +853,7 @@ const rebuildObjects = async () => {
             createMesh(part, fallbackPartGeometry(part));
         }
 
+        updateSection();
         return;
     }
 
@@ -535,6 +882,12 @@ const rebuildObjects = async () => {
             .filter((instance) => visibleInstanceIdSet.value === null || visibleInstanceIdSet.value.has(instance.id))
             .forEach((instance) => createMesh(part, geometry, instance));
     });
+    applyExplodedPositions();
+    updateSection();
+
+    if (props.focusRequestId > 0) {
+        window.requestAnimationFrame(focusInstances);
+    }
 };
 
 const scheduleRebuildObjects = () => {
@@ -552,6 +905,7 @@ const rayFromEvent = (event) => {
         -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
     );
     const raycaster = new THREE.Raycaster();
+    raycaster.params.Line.threshold = 0.08;
     raycaster.setFromCamera(pointer, camera);
 
     return raycaster;
@@ -649,9 +1003,10 @@ const applyTransformPreview = (value, { snap = false } = {}) => {
     }
 
     applyInstanceTransform(mesh, data.part, position, rotation);
+    applyExplodedPositions();
     state.snap = null;
 
-    if (state.mode === 'move' && snap) {
+    if (state.mode === 'move' && snap && Number(props.explodeDistance) === 0) {
         const snapped = findMoveSnap(mesh, state.axis);
 
         if (snapped) {
@@ -660,6 +1015,7 @@ const applyTransformPreview = (value, { snap = false } = {}) => {
             value += snappedOffset;
             state.snap = snapped;
             applyInstanceTransform(mesh, data.part, position, rotation);
+            applyExplodedPositions();
         }
     }
 
@@ -676,7 +1032,7 @@ const beginTransform = (mode) => {
     const data = selectedInstanceData.value;
     const mesh = selectedInstanceMesh();
 
-    if (!data || !mesh || props.mode !== 'assembly' || lockedInstanceIdSet.value.has(data.instance.id)) return;
+    if (!data || !mesh || props.mode !== 'assembly' || Number(props.explodeDistance) > 0 || lockedInstanceIdSet.value.has(data.instance.id)) return;
 
     if (transformState.value) {
         applyTransformPreview(0);
@@ -876,6 +1232,17 @@ const pointerDown = (event) => {
 
     controls.mouseButtons.LEFT = null;
 
+    if (props.measurementTool && event.button === 0) {
+        const intersection = raycaster.intersectObjects(objectMeshes, false)[0];
+
+        if (intersection) {
+            addMeasurementPoint(intersection.point);
+            event.preventDefault();
+        }
+
+        return;
+    }
+
     if (props.mode === 'part') {
         if (event.button !== 0) return;
 
@@ -1035,6 +1402,44 @@ const pointerDown = (event) => {
 
     if (props.mode !== 'assembly' || event.button !== 0) return;
 
+    const connectionIntersection = connectionsGroup
+        ? raycaster.intersectObjects(connectionsGroup.children, false)[0]
+        : null;
+
+    if (connectionIntersection?.object.userData.connectionId) {
+        const connectionId = connectionIntersection.object.userData.connectionId;
+        const role = connectionIntersection.object.userData.connectionRole;
+        const connection = props.connections.find((item) => item.id === connectionId);
+
+        emit('select-connection', connectionId);
+
+        if (connectionId === props.selectedConnectionId && role && connection) {
+            const instanceId = connection[`${role}_instance_id`];
+            const mesh = objectMeshes.find((candidate) => candidate.userData.instanceId === instanceId);
+
+            if (mesh) {
+                const placement = connectionPoint(connection, role, mesh);
+                const worldNormal = placement.frame.inward.clone().applyQuaternion(mesh.quaternion).normalize();
+                const dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(worldNormal, placement.point);
+
+                dragState = {
+                    connectionId,
+                    connectionRole: role,
+                    dragPlane,
+                    frame: placement.frame,
+                    mesh,
+                    surface: placement.surface,
+                };
+                controls.enabled = false;
+                renderer.domElement.setPointerCapture(event.pointerId);
+                renderer.domElement.style.cursor = 'grabbing';
+            }
+        }
+
+        event.preventDefault();
+        return;
+    }
+
     const intersection = raycaster.intersectObjects(objectMeshes, false)[0];
 
     const instanceId = intersection?.object.userData.instanceId ?? null;
@@ -1083,6 +1488,31 @@ const pointerMove = (event) => {
         return;
     }
 
+    if (props.mode === 'assembly' && dragState?.connectionId) {
+        const worldPoint = rayFromEvent(event).ray.intersectPlane(dragState.dragPlane, new THREE.Vector3());
+
+        if (!worldPoint) return;
+
+        const localPoint = dragState.mesh.worldToLocal(worldPoint.clone());
+        const relativePoint = localPoint.sub(dragState.frame.center);
+        const centerU = clamp(
+            relativePoint.dot(dragState.frame.u) / millimeterScale + dragState.surface.u / 2,
+            0,
+            dragState.surface.u,
+        );
+        const centerV = clamp(
+            relativePoint.dot(dragState.frame.v) / millimeterScale + dragState.surface.v / 2,
+            0,
+            dragState.surface.v,
+        );
+        emit('update-connection-parameters', dragState.connectionId, {
+            [`${dragState.connectionRole}_center_u`]: Math.round(centerU * 10) / 10,
+            [`${dragState.connectionRole}_center_v`]: Math.round(centerV * 10) / 10,
+        });
+
+        return;
+    }
+
     if (!dragState) {
         if (props.mode === 'part') {
             const raycaster = rayFromEvent(event);
@@ -1101,6 +1531,13 @@ const pointerMove = (event) => {
             renderer.domElement.style.cursor = hoveredHelper
                 ? ['groove', 'plunge_route', 'drill'].includes(selectedOperation.value?.type) ? 'grab' : 'pointer'
                 : hoveredStock ? 'pointer' : '';
+        } else if (props.mode === 'assembly') {
+            const connectionObject = connectionsGroup
+                ? rayFromEvent(event).intersectObjects(connectionsGroup.children, false)[0]?.object
+                : null;
+            renderer.domElement.style.cursor = connectionObject?.userData.connectionRole
+                ? connectionObject.userData.connectionId === props.selectedConnectionId ? 'grab' : 'pointer'
+                : '';
         }
 
         return;
@@ -1240,6 +1677,10 @@ const pointerUp = (event) => {
     controls.mouseButtons.LEFT = null;
 
     if (!dragState) return;
+
+    if (dragState.connectionId) {
+        emit('commit-connection-parameters', dragState.connectionId);
+    }
 
     dragState = null;
     controls.enabled = true;
@@ -1430,7 +1871,11 @@ onMounted(() => {
     scene = new THREE.Scene();
     scene.background = new THREE.Color('#eef1ed');
     objectsGroup = new THREE.Group();
+    measurementGroup = new THREE.Group();
+    connectionsGroup = new THREE.Group();
     scene.add(objectsGroup);
+    scene.add(measurementGroup);
+    scene.add(connectionsGroup);
 
     camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1000);
     camera.position.set(9, 7, 11);
@@ -1438,6 +1883,7 @@ onMounted(() => {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
+    renderer.localClippingEnabled = true;
     renderer.domElement.addEventListener('pointerdown', pointerDown);
     renderer.domElement.addEventListener('pointermove', pointerMove);
     renderer.domElement.addEventListener('pointerup', pointerUp);
@@ -1481,7 +1927,28 @@ onMounted(() => {
     render();
 });
 
-watch(() => [props.mode, props.parts, props.activePart, props.selectedInstanceId, props.selectedOperationId, props.visibleInstanceIds, props.lockedInstanceIds], scheduleRebuildObjects, { deep: true });
+watch(() => [props.mode, props.parts, props.activePart, props.selectedOperationId, props.visibleInstanceIds, props.lockedInstanceIds], scheduleRebuildObjects, { deep: true });
+watch(() => props.selectedInstanceId, (selectedInstanceId, previousInstanceId) => {
+    if (transformState.value && selectedInstanceId !== previousInstanceId) {
+        finishTransform(false);
+    }
+
+    clearTransformGuide();
+    objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === selectedInstanceId));
+});
+watch(() => props.ghostedInstanceIds, () => {
+    objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === props.selectedInstanceId));
+}, { deep: true });
+watch(() => props.explodeDistance, applyExplodedPositions);
+watch(() => props.connections, updateConnectionHelpers, { deep: true });
+watch(() => props.selectedConnectionId, updateConnectionHelpers);
+watch(() => props.focusedInstanceIds, () => {
+    objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === props.selectedInstanceId));
+}, { deep: true });
+watch(() => props.focusRequestId, () => window.requestAnimationFrame(focusInstances));
+watch(() => props.measurementTool, clearMeasurement);
+watch(() => props.measurementResetId, clearMeasurement);
+watch(() => [props.sectionAxis, props.sectionOffset, props.sectionInverted], updateSection);
 watch(() => props.selectedOperationId, () => {
     anglePanelOpen.value = false;
     hoveredOperationId.value = null;
@@ -1503,6 +1970,14 @@ onBeforeUnmount(() => {
     renderer?.domElement.removeEventListener('contextmenu', preventContextMenu);
     window.removeEventListener('keydown', keyDown);
     cancelOperationToolHide();
+    clearMeasurement();
+    clearConnectionHelpers();
+    if (sectionHelper) {
+        scene?.remove(sectionHelper);
+        sectionHelper.geometry.dispose();
+        sectionHelper.material.dispose();
+        sectionHelper = null;
+    }
     clearObjects();
     renderer?.dispose();
 });

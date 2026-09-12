@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable(['project_id', 'assembly_group_id', 'position_x', 'position_y', 'position_z', 'rotation_x', 'rotation_y', 'rotation_z', 'mirrored'])]
 class PartInstance extends Model
@@ -43,5 +44,15 @@ class PartInstance extends Model
     public function assemblyGroup(): BelongsTo
     {
         return $this->belongsTo(AssemblyGroup::class);
+    }
+
+    public function primaryConnections(): HasMany
+    {
+        return $this->hasMany(ProjectConnection::class, 'primary_instance_id');
+    }
+
+    public function secondaryConnections(): HasMany
+    {
+        return $this->hasMany(ProjectConnection::class, 'secondary_instance_id');
     }
 }

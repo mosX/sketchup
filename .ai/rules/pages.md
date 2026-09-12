@@ -16,3 +16,12 @@ In assembly mode, G then X/Y/Z moves the selected instance on a world axis; R th
 
 ## Use Z-up editor coordinates
 Assembly coordinates use X and Y on the floor plane and Z as height. Three.js is Y-up, so map editor (x, y, z) to scene (x, z, y) consistently for instance positions, rotations, transform guides, and pointer projection; keep persisted API fields in editor coordinates.
+
+## Keep exploded view non-destructive
+Exploded assembly view offsets existing Three.js meshes from their saved base positions and never persists transforms. Disable G/R transforms while exploded, restore base positions at distance zero, and do not rebuild CSG geometry when only the explode distance changes.
+
+## Keep inspection tools viewport-only
+Diagnostic focus, measurements, section planes, and assembly-step visibility are temporary viewport state. They must not mutate saved instance visibility/transforms or trigger CSG rebuilds when only appearance/tool settings change.
+
+## Render connections without rebuilding parts
+Connection markers and dashed links live in their own Three.js group. Creating, selecting, verifying, or deleting a connection must update only connection helpers and mesh appearance, never rerun part CSG.

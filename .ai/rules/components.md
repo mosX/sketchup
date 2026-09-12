@@ -25,3 +25,6 @@ Schedule reactive viewport rebuilds with a short trailing delay so slider events
 
 ## Snap modal moves and accept numeric deltas
 During G-axis movement, snap the selected bounding-box min/center/max to nearby instance anchors within 15 mm and show the target in the transform HUD; Ctrl temporarily disables snapping. After G/R then X/Y/Z, digit, minus, decimal point, and Backspace keys build an exact delta, and Enter commits it without snapping.
+
+## Do not rebuild geometry on instance selection
+Changing selectedInstanceId must only update selection materials/edges on existing assembly meshes. Keep it out of the deep scene-rebuild watcher so clicking parts never clears the viewport or restarts CSG work.

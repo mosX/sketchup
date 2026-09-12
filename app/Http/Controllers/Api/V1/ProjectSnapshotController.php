@@ -18,6 +18,7 @@ class ProjectSnapshotController extends Controller
         $project->load([
             'partDefinitions' => fn ($query) => $query->with('instances')->withCount('instances')->latest(),
             'assemblyGroups' => fn ($query) => $query->withCount(['instances', 'children'])->orderBy('sort_order')->orderBy('name'),
+            'projectConnections' => fn ($query) => $query->latest(),
         ]);
 
         return new ProjectResource($project);
