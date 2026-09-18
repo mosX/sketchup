@@ -39,7 +39,7 @@ class ProjectValidationControllerTest extends TestCase
             ->assertJsonPath('data.valid', true)
             ->assertJsonPath('data.summary.part_count', 2)
             ->assertJsonPath('data.summary.instance_count', 1)
-            ->assertJsonPath('data.summary.bounds.min.z', -10)
+            ->assertJsonPath('data.summary.bounds.min.z', -30)
             ->assertJsonFragment(['code' => 'part_unused'])
             ->assertJsonFragment(['code' => 'instance_below_floor']);
     }
@@ -63,8 +63,8 @@ class ProjectValidationControllerTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.summary.bounds.min.z', -475)
-            ->assertJsonPath('data.summary.bounds.max.z', 525)
+            ->assertJsonPath('data.summary.bounds.min.z', -500)
+            ->assertJsonPath('data.summary.bounds.max.z', 500)
             ->assertJsonPath('data.summary.bounds_note', 'Bounds include instance rotation and are axis-aligned in project coordinates.');
     }
 }

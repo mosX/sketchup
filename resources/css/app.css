@@ -12,6 +12,7 @@
     --color-ink: #17201c;
 }
 
+
 @layer base {
     * { box-sizing: border-box; }
     html, body, #app { min-height: 100%; }
@@ -270,3 +271,5 @@
     .library-empty { min-height: 5rem; margin: .4rem; padding: .4rem; }
     .library-empty strong, .library-empty small { display: none; }
 }
+
+@import './workshop.css';

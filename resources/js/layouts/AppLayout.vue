@@ -1,12 +1,12 @@
 <template>
-    <div class="min-h-screen bg-stone-100 text-stone-950">
+    <div class="workshop-layout min-h-screen text-stone-950">
         <header class="border-b border-stone-200 bg-white/95 backdrop-blur">
             <div class="mx-auto flex h-18 max-w-7xl items-center justify-between gap-6 px-5 lg:px-8">
                 <router-link :to="{ name: 'projects' }" class="flex shrink-0 items-center gap-3">
                     <span class="brand-mark">W</span>
                     <span class="hidden sm:block">
                         <strong class="block text-[15px] tracking-tight">Woodwork</strong>
-                        <span class="block text-[10px] font-semibold tracking-[0.2em] text-stone-400 uppercase">3D Studio</span>
+                        <span class="block text-xs text-stone-500">Ваша столярная мастерская</span>
                     </span>
                 </router-link>
 

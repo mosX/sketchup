@@ -1,4 +1,5 @@
 import { deserializeGeometry } from './transfer.js';
+import { createResultCache, geometryKey } from './resultCache.js';
 
 const abortError = () => new DOMException('Geometry calculation was superseded.', 'AbortError');
 
@@ -6,6 +7,9 @@ export const createGeometryWorkerClient = () => {
     const pendingRequests = new Map();
     let nextRequestId = 1;
     let worker;
+    const cache = createResultCache();
+    const statistics = { hits: 0, calculations: 0, lastDurationMs: 0 };
+    const unpack = data => ({ partGeometry: deserializeGeometry(data.partGeometry), offcutGeometry: deserializeGeometry(data.offcutGeometry) });
 
     const startWorker = () => {
         worker = new Worker(new URL('../../workers/csg.worker.js', import.meta.url), { type: 'module' });
@@ -21,10 +25,10 @@ export const createGeometryWorkerClient = () => {
                 return;
             }
 
-            request.resolve({
-                partGeometry: deserializeGeometry(data.partGeometry),
-                offcutGeometry: deserializeGeometry(data.offcutGeometry),
-            });
+            const result = { partGeometry: data.partGeometry, offcutGeometry: data.offcutGeometry };
+            cache.set(request.key, result);
+            statistics.lastDurationMs = performance.now() - request.started;
+            request.resolve(unpack(result));
         };
         worker.onerror = (error) => {
             pendingRequests.forEach(({ reject }) => reject(error));
@@ -33,6 +37,7 @@ export const createGeometryWorkerClient = () => {
     };
 
     const cancelAll = () => {
+        if (!pendingRequests.size) return;
         pendingRequests.forEach(({ reject }) => reject(abortError()));
         pendingRequests.clear();
         worker.terminate();
@@ -40,8 +45,12 @@ export const createGeometryWorkerClient = () => {
     };
 
     const calculate = (part, includeOffcut = null) => new Promise((resolve, reject) => {
+        const key = geometryKey(part, includeOffcut);
+        const cached = cache.get(key);
+        if (cached) { statistics.hits++; resolve(unpack(cached)); return; }
+        statistics.calculations++;
         const id = nextRequestId++;
-        pendingRequests.set(id, { resolve, reject });
+        pendingRequests.set(id, { resolve, reject, key, started: performance.now() });
         worker.postMessage({
             id,
             part: JSON.parse(JSON.stringify(part)),
@@ -53,9 +62,10 @@ export const createGeometryWorkerClient = () => {
         pendingRequests.forEach(({ reject }) => reject(abortError()));
         pendingRequests.clear();
         worker.terminate();
+        cache.clear();
     };
 
     startWorker();
 
-    return { calculate, cancelAll, dispose };
+    return { calculate, cancelAll, dispose, statistics };
 };

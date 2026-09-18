@@ -1,5 +1,5 @@
 <template>
-    <div class="editor-shell">
+    <div class="editor-shell" :class="{ 'library-collapsed': !libraryVisible, 'inspector-collapsed': !inspectorVisible }">
         <header class="editor-header">
             <router-link :to="{ name: 'projects' }" class="editor-logo" aria-label="К списку проектов">
                 <span class="brand-mark brand-mark-small">W</span>
@@ -37,13 +37,30 @@
             </div>
 
             <button class="button-secondary button-compact" type="button" @click="openProjectAnalysis">Анализ и раскрой</button>
-            <button class="button-secondary button-compact" type="button" @click="startAssemblyGuide">Сборка по шагам</button>
-            <button class="button-secondary button-compact" type="button" @click="openTemplateCreator">В шаблон</button>
-            <button class="button-secondary button-compact" type="button" @click="openAiAccess">AI-доступ</button>
+            <details class="workspace-menu" @keydown.esc="$event.currentTarget.open = false">
+                <summary class="button-secondary button-compact">Ещё <span aria-hidden="true">⌄</span></summary>
+                <div class="workspace-menu-items" @click="$event.currentTarget.parentElement.open = false">
+                    <button type="button" @click="openScriptEditor">Сценарии · JavaScript</button>
+                    <button type="button" @click="showVersions = true">Версии проекта</button>
+                    <button type="button" @click="startAssemblyGuide">Сборка по шагам</button>
+                    <button type="button" @click="openTemplateCreator">Сохранить как шаблон</button>
+                    <button type="button" @click="openAiAccess">Доступ для AI и API</button>
+                </div>
+            </details>
             <button class="button-primary button-compact" type="button" :disabled="saveState === 'saving'" @click="saveCurrent">
                 {{ editorMode === 'part' ? 'Сохранить заготовку' : 'Сохранить проект' }}
             </button>
         </header>
+
+        <div class="workspace-context">
+            <button type="button" :aria-pressed="libraryVisible" @click="toggleWorkspacePanel('library')">☷ Заготовки и состав</button>
+            <span class="workspace-context-label">{{ editorMode === 'part' ? 'Обработка заготовки' : 'Сборка изделия' }} <span aria-hidden="true">/</span> размеры в миллиметрах</span>
+            <button type="button" :aria-pressed="inspectorVisible" @click="toggleWorkspacePanel('inspector')">Настройки детали ☷</button>
+        </div>
+        <div v-if="recovery.pending.value.length" class="flex flex-wrap items-center gap-3 bg-amber-100 px-4 py-2 text-sm text-amber-950" role="status">
+            <span>Найден черновик: {{ recovery.pending.value[0].name }}</span><button class="font-semibold underline" @click="recovery.restore">Восстановить</button><button class="underline" @click="recovery.discard">Удалить черновик</button>
+        </div>
+        <p v-if="recovery.warning.value" role="alert" class="bg-amber-100 px-4 py-2 text-sm">{{ recovery.warning.value }}</p>
 
         <div v-if="loading" class="grid flex-1 place-items-center bg-stone-100">
             <div class="text-center"><div class="loader mx-auto"></div><p class="mt-4 text-sm text-stone-500">Открываем мастерскую…</p></div>
@@ -65,8 +82,10 @@
                     <button class="library-add-button" type="button" aria-label="Создать заготовку" @click="showCreatePart = true">＋</button>
                 </div>
 
+                <label v-if="projects.parts.length" class="library-search"><span class="sr-only">Найти заготовку</span><input v-model="partSearch" type="search" placeholder="Найти заготовку…"></label>
                 <div v-if="projects.parts.length" class="parts-list">
-                    <article v-for="part in projects.parts" :key="part.id" class="part-library-card" :class="{ active: selectedPartId === part.id }" @click="selectPart(part)">
+                    <p v-if="!filteredLibraryParts.length" class="p-3 text-sm text-stone-500">Ничего не найдено. Попробуйте другое название.</p>
+                    <article v-for="part in filteredLibraryParts" :key="part.id" class="part-library-card" :class="{ active: selectedPartId === part.id }" @click="selectPart(part)">
                         <div class="part-library-thumb" aria-hidden="true"><span></span></div>
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center justify-between gap-2">
@@ -620,6 +639,7 @@
                             <label v-for="axis in axes" :key="`rotation-${axis}`" class="dimension-field"><span>{{ axis.toUpperCase() }}</span><input v-model.number="selectedInstance.rotation[axis]" type="number" @focus="beginInstanceInspectorEdit" @change="saveInstance"></label>
                         </div>
                         <label class="mirror-toggle mt-4"><input v-model="selectedInstance.mirrored" type="checkbox" @pointerdown="beginInstanceInspectorEdit" @change="saveInstance"><span>Зеркальный экземпляр</span></label>
+                        <AssemblyPlacementPanel :key="selectedInstance.id" :source="{ part: selectedPart, instance: selectedInstance }" :parts="projects.parts" :disabled="explodeDistance > 0 || assemblyInstanceState.lockedInstanceIds.includes(selectedInstance.id)" :commit="commitInstanceTransform" />
                     </div>
 
                     <div class="inspector-section">
@@ -688,6 +708,8 @@
             </aside>
         </div>
 
+        <ProjectScriptDialog v-if="showScriptEditor" :project-id="projectId" :apply-script="applyScript" @close="showScriptEditor = false" @detach="clearHistory" />
+        <ProjectVersionsDialog v-if="showVersions" :project-id="projectId" :on-restored="reloadRestoredProject" @close="showVersions = false" />
         <div v-if="showCreatePart" class="editor-modal-backdrop" @click.self="showCreatePart = false">
             <form class="editor-modal" @submit.prevent="createPart">
                 <div class="flex items-start justify-between gap-4">
@@ -886,6 +908,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ThreeViewport from '../components/ThreeViewport.vue';
+import ProjectScriptDialog from '../components/ProjectScriptDialog.vue';
+import ProjectVersionsDialog from '../components/ProjectVersionsDialog.vue';
+import AssemblyPlacementPanel from '../components/AssemblyPlacementPanel.vue';
+import { usePartDraftRecovery } from '../editor/usePartDraftRecovery.js';
+import { useAuthStore } from '../stores/auth';
+import { useProjectScripts } from '../editor/useProjectScripts.js';
 import {
     assemblyBreadcrumbs,
     assemblyInstanceState as calculateAssemblyInstanceState,
@@ -942,6 +970,8 @@ const selectedOperationId = ref(null);
 const partDraft = ref(null);
 const historyExpanded = ref(false);
 const showCreatePart = ref(false);
+const showScriptEditor = ref(false);
+const showVersions = ref(false);
 const creatingPart = ref(false);
 const createError = ref('');
 const showProjectAnalysis = ref(false);
@@ -1008,11 +1038,32 @@ const {
     canRedo,
     canUndo,
     record: recordHistory,
+    clear: clearHistory,
     redo: redoHistory,
     redoLabel,
     undo: undoHistory,
     undoLabel,
 } = useEditorHistory();
+const { applyScript } = useProjectScripts({
+    projectId, projects, recordHistory,
+    onApplied: async () => {
+        selectedInstanceId.value = null;
+        selectedOperationId.value = null;
+        selectedPartId.value = null;
+        partDraft.value = null;
+        editorMode.value = 'assembly';
+        await resetPartHistoryBaseline();
+    },
+});
+const openScriptEditor = async () => {
+    if (editorMode.value === 'part') {
+        if (!window.confirm('Сохранить текущую заготовку и открыть сценарий?')) return;
+        await savePart();
+        if (saveState.value === 'error') return;
+    }
+    flushPartHistory();
+    showScriptEditor.value = true;
+};
 let partHistoryBaseline = null;
 let partHistoryTimer = null;
 let partHistoryLabel = 'Изменение заготовки';
@@ -1023,6 +1074,18 @@ const activePart = computed(() => projects.parts.find((part) => part.id === sele
 const selectedPart = computed(() => projects.parts.find((part) => part.instances?.some((instance) => instance.id === selectedInstanceId.value)) ?? null);
 const selectedInstance = computed(() => selectedPart.value?.instances.find((instance) => instance.id === selectedInstanceId.value) ?? null);
 const selectedConnection = computed(() => projects.connections.find((connection) => connection.id === selectedConnectionId.value) ?? null);
+const libraryVisible = ref(window.innerWidth > 900);
+const inspectorVisible = ref(window.innerWidth > 900);
+const toggleWorkspacePanel = (panel) => {
+    const target = panel === 'library' ? libraryVisible : inspectorVisible;
+    target.value = !target.value;
+
+    if (target.value && window.innerWidth <= 900) {
+        (panel === 'library' ? inspectorVisible : libraryVisible).value = false;
+    }
+};
+const partSearch = ref('');
+const filteredLibraryParts = computed(() => projects.parts.filter((part) => `${part.name} ${part.material ?? ''}`.toLocaleLowerCase().includes(partSearch.value.trim().toLocaleLowerCase())));
 const connectionSummaryParameters = computed(() => Object.fromEntries(Object.entries(selectedConnection.value?.parameters ?? {}).filter(([key]) => ![
     'primary_center_u',
     'primary_center_v',
@@ -1266,6 +1329,7 @@ onMounted(async () => {
         projectDescription.value = project.description ?? '';
         selectedPartId.value = parts[0]?.id ?? null;
         parts.forEach((part) => { instanceQuantities[part.id] = 1; });
+        recovery.load();
     } catch (error) {
         if (error.response?.status === 404) {
             await router.replace({ name: 'projects' });
@@ -1298,6 +1362,28 @@ const openPart = async (part) => {
     selectedOperationId.value = null;
     historyExpanded.value = false;
     editorMode.value = 'part';
+    await resetPartHistoryBaseline();
+};
+
+const auth = useAuthStore();
+const recovery = usePartDraftRecovery({ projectId, userId: () => auth.user?.id ?? 'session', projects, selectedPartId, partDraft, draftFromPart, openPart });
+const reloadRestoredProject = async () => {
+    window.clearTimeout(partHistoryTimer);
+    partDraft.value = null;
+    selectedPartId.value = null;
+    selectedInstanceId.value = null;
+    selectedOperationId.value = null;
+    selectedGroupId.value = null;
+    selectedConnectionId.value = null;
+    activeAssemblyGroupId.value = null;
+    isolatedGroupId.value = null;
+    explodeDistance.value = 0;
+    clearHistory();
+    await Promise.all([projects.fetchProject(projectId), projects.fetchParts(projectId), projects.fetchAssemblyGroups(projectId), projects.fetchProjectConnections(projectId)]);
+    projectName.value = projects.activeProject.name;
+    projectDescription.value = projects.activeProject.description ?? '';
+    editorMode.value = 'assembly';
+    recovery.load();
     await resetPartHistoryBaseline();
 };
 
@@ -1522,6 +1608,7 @@ const createPart = async () => {
             await projects.createInstances(projectId, part.id, {
                 quantity: newPart.quantity,
                 assembly_group_id: activeAssemblyGroupId.value,
+                position_z: Number(part.dimensions.thickness) / 2,
             });
         }
 
@@ -1554,6 +1641,7 @@ const savePart = async () => {
             operations: appliedOperations,
         });
         partDraft.value = draftFromPart(updated);
+        recovery.clear(updated.id);
         selectedOperationId.value = null;
         historyExpanded.value = false;
         await resetPartHistoryBaseline();
@@ -1579,7 +1667,7 @@ const removePart = async () => {
 const addInstances = async (part) => {
     const quantity = instanceQuantities[part.id] || 1;
     const assemblyGroupId = activeAssemblyGroupId.value;
-    let instances = await projects.createInstances(projectId, part.id, { quantity, assembly_group_id: assemblyGroupId });
+    let instances = await projects.createInstances(projectId, part.id, { quantity, assembly_group_id: assemblyGroupId, position_z: Number(part.dimensions.thickness) / 2 });
     selectedPartId.value = part.id;
     selectedInstanceId.value = instances[0]?.id ?? null;
     editorMode.value = 'assembly';
@@ -1591,7 +1679,7 @@ const addInstances = async (part) => {
             selectedInstanceId.value = null;
         },
         redo: async () => {
-            instances = await projects.createInstances(projectId, part.id, { quantity, assembly_group_id: assemblyGroupId });
+            instances = await projects.createInstances(projectId, part.id, { quantity, assembly_group_id: assemblyGroupId, position_z: Number(part.dimensions.thickness) / 2 });
             selectedPartId.value = part.id;
             selectedInstanceId.value = instances[0]?.id ?? null;
             editorMode.value = 'assembly';
@@ -2187,7 +2275,7 @@ const commitInstanceTransform = async ({ instanceId, position, rotation, initial
     const part = projects.parts.find((item) => item.instances?.some((instance) => instance.id === instanceId));
     const instance = part?.instances.find((item) => item.id === instanceId);
 
-    if (!instance) return;
+    if (!instance || assemblyInstanceState.value.lockedInstanceIds.includes(instanceId)) return false;
 
     instance.position = { ...position };
     instance.rotation = { ...rotation };
@@ -2215,10 +2303,12 @@ const commitInstanceTransform = async ({ instanceId, position, rotation, initial
         }
 
         saveState.value = 'saved';
+        return true;
     } catch {
         instance.position = { ...initialPosition };
         instance.rotation = { ...initialRotation };
         saveState.value = 'error';
+        return false;
     }
 };
 
@@ -2279,6 +2369,7 @@ const saveProject = async () => {
 
 const saveCurrent = () => editorMode.value === 'part' ? savePart() : saveProject();
 const handleEditorHistoryKey = (event) => {
+    if (showScriptEditor.value || showVersions.value) return;
     if (event.shiftKey && event.key.toLowerCase() === 'd' && editorMode.value === 'assembly' && selectedInstance.value) {
         if (!event.repeat && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName) && !event.target?.isContentEditable) {
             event.preventDefault();

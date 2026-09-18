@@ -32,6 +32,14 @@ class StoreProjectConnectionRequest extends FormRequest
         return [
             'primary_instance_id' => ['required', 'integer', $this->instanceExistsRule()],
             'secondary_instance_id' => ['required', 'integer', 'different:primary_instance_id', $this->instanceExistsRule()],
+            ...self::definitionRules(),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public static function definitionRules(): array
+    {
+        return [
             'type' => ['required', Rule::in(['butt', 'half_lap', 'mortise_tenon', 'dowel'])],
             'label' => ['nullable', 'string', 'max:255'],
             'note' => ['nullable', 'string', 'max:5000'],

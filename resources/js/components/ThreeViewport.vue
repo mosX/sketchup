@@ -91,6 +91,7 @@
 </template>
 
 <script setup>
+import { applyMeshAppearance, disposeSceneObjects } from '../editor/sceneAppearance.js';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -110,6 +111,7 @@ import {
 } from '../editor/geometry/coordinates.js';
 import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/geometry/cutters.js';
 import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
+import { geometryKey } from '../editor/geometry/resultCache.js';
 import { connectionFacePlacement, connectionOperationPlan } from '../editor/connections.js';
 
 const props = defineProps({
@@ -203,7 +205,7 @@ const selectedInstanceData = computed(() => {
 const applyInstanceTransform = (mesh, part, position, rotation) => {
     mesh.position.set(
         Number(position.x) * millimeterScale,
-        Number(position.z) * millimeterScale + Number(part.dimensions.thickness) * millimeterScale / 2,
+        Number(position.z) * millimeterScale,
         Number(position.y) * millimeterScale,
     );
 
@@ -222,7 +224,7 @@ const applyInstanceTransform = (mesh, part, position, rotation) => {
 };
 
 const applyExplodedPositions = () => {
-    const assemblyMeshes = objectMeshes.filter((mesh) => mesh.userData.instanceId !== null && mesh.userData.basePosition);
+    const assemblyMeshes = objectMeshes.filter((mesh) => mesh.visible && mesh.userData.instanceId !== null && mesh.userData.basePosition);
     const distance = Math.max(0, Number(props.explodeDistance)) * millimeterScale;
 
     if (!assemblyMeshes.length) return;
@@ -285,7 +287,7 @@ const addConnectionMachiningPreview = (connection) => {
     connectionOperationPlan(connection, props.parts).forEach(({ instance, operations, part }) => {
         const mesh = objectMeshes.find((candidate) => candidate.userData.instanceId === instance.id);
 
-        if (!mesh) return;
+        if (!mesh || !mesh.visible) return;
 
         mesh.updateWorldMatrix(true, false);
         operations.forEach((operation) => {
@@ -320,7 +322,7 @@ const updateConnectionHelpers = () => {
         const primary = objectMeshes.find((mesh) => mesh.userData.instanceId === connection.primary_instance_id);
         const secondary = objectMeshes.find((mesh) => mesh.userData.instanceId === connection.secondary_instance_id);
 
-        if (!primary || !secondary) return;
+        if (!primary?.visible || !secondary?.visible) return;
 
         const selected = connection.id === props.selectedConnectionId;
         const color = selected ? '#dc2626' : connectionColor(connection.type);
@@ -355,7 +357,7 @@ const updateConnectionHelpers = () => {
 const focusInstances = () => {
     if (!camera || !controls || focusedInstanceIdSet.value.size === 0) return;
 
-    const meshes = objectMeshes.filter((mesh) => focusedInstanceIdSet.value.has(mesh.userData.instanceId));
+    const meshes = objectMeshes.filter((mesh) => mesh.visible && focusedInstanceIdSet.value.has(mesh.userData.instanceId));
 
     if (!meshes.length) return;
 
@@ -744,40 +746,19 @@ const clearObjects = () => {
     clearConnectionHelpers();
     objectMeshes.splice(0);
     operationHelpers.splice(0);
-    objectsGroup.children.slice().forEach((object) => {
-        object.traverse((child) => {
-            child.geometry?.dispose();
-            child.material?.dispose();
-        });
-        objectsGroup.remove(object);
-    });
+    disposeSceneObjects(objectsGroup.children);
+    objectsGroup.clear();
 };
 
-const updateMeshAppearance = (mesh, isSelected) => {
-    const isGhosted = ghostedInstanceIdSet.value.has(mesh.userData.instanceId);
-    const isFocusDimmed = focusedInstanceIdSet.value.size > 0
+const updateMeshAppearance = (mesh, isSelected) => applyMeshAppearance(mesh, {
+    selected: isSelected,
+    ghosted: ghostedInstanceIdSet.value.has(mesh.userData.instanceId),
+    dimmed: focusedInstanceIdSet.value.size > 0
         && mesh.userData.instanceId !== null
-        && !focusedInstanceIdSet.value.has(mesh.userData.instanceId);
-    const isTransparent = isGhosted || isFocusDimmed;
-    const edges = mesh.userData.edges;
+        && !focusedInstanceIdSet.value.has(mesh.userData.instanceId),
+});
 
-    mesh.material.emissive.set(isSelected ? '#315f4a' : '#000000');
-    mesh.material.emissiveIntensity = isSelected ? 0.24 : 0;
-    mesh.material.transparent = isTransparent;
-    mesh.material.opacity = isFocusDimmed ? 0.07 : isGhosted ? 0.2 : 1;
-    mesh.material.depthWrite = !isTransparent;
-    mesh.material.needsUpdate = true;
-    mesh.renderOrder = isTransparent ? 1 : 0;
-
-    if (edges) {
-        edges.material.color.set(isSelected ? '#173d30' : '#6f5235');
-        edges.material.transparent = isTransparent;
-        edges.material.opacity = isFocusDimmed ? 0.08 : isGhosted ? 0.32 : 1;
-        edges.material.needsUpdate = true;
-    }
-};
-
-const createMesh = (part, geometry, instance = null) => {
+const createMesh = (part, geometry, instance = null, edgeGeometry = null) => {
     const isSelected = instance?.id === props.selectedInstanceId;
     const material = new THREE.MeshStandardMaterial({
         color: palette[part.id % palette.length],
@@ -793,7 +774,7 @@ const createMesh = (part, geometry, instance = null) => {
     mesh.userData.part = part;
 
     const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geometry),
+        edgeGeometry ?? new THREE.EdgesGeometry(geometry),
         new THREE.LineBasicMaterial({ color: isSelected ? '#173d30' : '#6f5235' }),
     );
     mesh.userData.edges = edges;
@@ -824,10 +805,14 @@ const rebuildObjects = async () => {
 
     const currentVersion = ++rebuildVersion;
     geometryWorker.cancelAll();
-    clearObjects();
 
     if (props.mode === 'part' && props.activePart) {
         const part = props.activePart;
+        operationHelpers.splice(0);
+        objectsGroup.children.filter(child => !objectMeshes.includes(child)).forEach(helper => {
+            disposeSceneObjects([helper]);
+            objectsGroup.remove(helper);
+        });
         createOperationPreviews(part);
         controls.target.set(0, Number(part.dimensions.thickness) * millimeterScale / 2, 0);
 
@@ -843,6 +828,8 @@ const rebuildObjects = async () => {
                 return;
             }
 
+            clearObjects();
+            createOperationPreviews(part);
             createMesh(part, result.partGeometry ?? fallbackPartGeometry(part));
             createOffcutPreview(part, result.offcutGeometry);
         } catch (error) {
@@ -850,6 +837,8 @@ const rebuildObjects = async () => {
             if (error.name === 'AbortError') return;
 
             console.error('Не удалось пересчитать геометрию в фоновом потоке.', error);
+            clearObjects();
+            createOperationPreviews(part);
             createMesh(part, fallbackPartGeometry(part));
         }
 
@@ -875,14 +864,14 @@ const rebuildObjects = async () => {
         return;
     }
 
+    clearObjects();
     results.forEach(({ part, geometry }) => {
         if (!geometry) return;
 
-        part.instances
-            .filter((instance) => visibleInstanceIdSet.value === null || visibleInstanceIdSet.value.has(instance.id))
-            .forEach((instance) => createMesh(part, geometry, instance));
+        const edges = new THREE.EdgesGeometry(geometry);
+        part.instances.forEach((instance) => createMesh(part, geometry, instance, edges));
     });
-    applyExplodedPositions();
+    syncAssemblyMeshes();
     updateSection();
 
     if (props.focusRequestId > 0) {
@@ -897,6 +886,24 @@ const scheduleRebuildObjects = () => {
         rebuildObjects();
     }, 50);
 };
+
+const syncAssemblyMeshes = () => {
+    if (props.mode !== 'assembly') return;
+    const instances = new Map(props.parts.flatMap(part => (part.instances ?? []).map(instance => [instance.id, { part, instance }])));
+    objectMeshes.forEach(mesh => {
+        const entry = instances.get(mesh.userData.instanceId);
+        if (!entry) { mesh.visible = false; return; }
+        mesh.userData.part = entry.part;
+        mesh.userData.partName = entry.part.name;
+        mesh.visible = visibleInstanceIdSet.value === null || visibleInstanceIdSet.value.has(entry.instance.id);
+        applyInstanceTransform(mesh, entry.part, entry.instance.position, entry.instance.rotation);
+        mesh.scale.x = entry.instance.mirrored ? -1 : 1;
+        updateMeshAppearance(mesh, entry.instance.id === props.selectedInstanceId);
+    });
+    applyExplodedPositions();
+    updateConnectionHelpers();
+};
+
 
 const rayFromEvent = (event) => {
     const bounds = renderer.domElement.getBoundingClientRect();
@@ -965,7 +972,7 @@ const findMoveSnap = (mesh, editorAxis) => {
     let nearest = null;
 
     objectMeshes.forEach((candidate) => {
-        if (candidate === mesh) return;
+        if (candidate === mesh || !candidate.visible) return;
 
         const candidateAnchors = boxAnchors(new THREE.Box3().setFromObject(candidate), axis);
 
@@ -1233,7 +1240,7 @@ const pointerDown = (event) => {
     controls.mouseButtons.LEFT = null;
 
     if (props.measurementTool && event.button === 0) {
-        const intersection = raycaster.intersectObjects(objectMeshes, false)[0];
+        const intersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
         if (intersection) {
             addMeasurementPoint(intersection.point);
@@ -1249,7 +1256,7 @@ const pointerDown = (event) => {
         const helper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
 
         if (!helper && selectedOperation.value?.type === 'groove') {
-            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+            const stockIntersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
             if (stockIntersection?.face) {
                 const face = grooveFaceFromNormal(stockIntersection.face.normal);
@@ -1270,7 +1277,7 @@ const pointerDown = (event) => {
         }
 
         if (!helper && selectedOperation.value?.type === 'edge_roundover') {
-            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+            const stockIntersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
             if (stockIntersection?.face) {
                 const edge = roundoverEdgeFromIntersection(props.activePart, stockIntersection);
@@ -1285,7 +1292,7 @@ const pointerDown = (event) => {
         }
 
         if (!helper && selectedOperation.value?.type === 'plunge_route') {
-            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+            const stockIntersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
             if (stockIntersection?.face) {
                 const operation = selectedOperation.value;
@@ -1326,7 +1333,7 @@ const pointerDown = (event) => {
         }
 
         if (!helper && selectedOperation.value?.type === 'drill') {
-            const stockIntersection = raycaster.intersectObjects(objectMeshes, false)[0];
+            const stockIntersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
             if (stockIntersection?.face) {
                 const operation = selectedOperation.value;
@@ -1440,7 +1447,7 @@ const pointerDown = (event) => {
         return;
     }
 
-    const intersection = raycaster.intersectObjects(objectMeshes, false)[0];
+    const intersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
 
     const instanceId = intersection?.object.userData.instanceId ?? null;
     emit('select-instance', lockedInstanceIdSet.value.has(instanceId) ? null : instanceId);
@@ -1518,7 +1525,7 @@ const pointerMove = (event) => {
             const raycaster = rayFromEvent(event);
             const hoveredHelper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
             const hoveredStock = ['groove', 'edge_roundover', 'plunge_route', 'drill'].includes(selectedOperation.value?.type)
-                ? raycaster.intersectObjects(objectMeshes, false)[0]?.object
+                ? raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0]?.object
                 : null;
 
             if (hoveredHelper) {
@@ -1927,7 +1934,10 @@ onMounted(() => {
     render();
 });
 
-watch(() => [props.mode, props.parts, props.activePart, props.selectedOperationId, props.visibleInstanceIds, props.lockedInstanceIds], scheduleRebuildObjects, { deep: true });
+watch(() => props.mode === 'part'
+    ? JSON.stringify(['part', props.activePart?.id, props.activePart ? geometryKey(props.activePart, props.selectedOperationId) : null])
+    : JSON.stringify(['assembly', props.parts.map(part => [part.id, geometryKey(part), (part.instances ?? []).map(instance => instance.id)])]), scheduleRebuildObjects);
+watch(() => [props.parts, props.visibleInstanceIds], syncAssemblyMeshes, { deep: true });
 watch(() => props.selectedInstanceId, (selectedInstanceId, previousInstanceId) => {
     if (transformState.value && selectedInstanceId !== previousInstanceId) {
         finishTransform(false);

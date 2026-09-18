@@ -1,13 +1,13 @@
 <template>
     <AppLayout>
         <div class="mx-auto max-w-7xl px-5 py-10 lg:px-8 lg:py-14">
-            <div class="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
+            <div class="workshop-welcome flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
                 <div>
-                    <p class="eyebrow">Рабочее пространство</p>
-                    <h1 class="mt-3 text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">Мои проекты</h1>
-                    <p class="mt-3 max-w-xl text-sm leading-6 text-stone-500">Здесь хранятся ваши модели, размеры и история работы.</p>
+                    <p class="eyebrow">От идеи до готовой вещи</p>
+                    <h1 class="mt-3 text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">Ваша мастерская</h1>
+                    <p class="mt-3 max-w-xl text-sm leading-6">Продолжите работу над изделием или начните с чистого листа.</p>
                 </div>
-                <button class="button-primary" type="button" @click="showCreateForm = !showCreateForm">
+                <button class="button-accent" type="button" :aria-expanded="showCreateForm" @click="showCreateForm = !showCreateForm">
                     <span class="text-lg leading-none">＋</span> Новый проект
                 </button>
             </div>
@@ -18,8 +18,8 @@
                 <button class="button-accent" type="submit" :disabled="creating">{{ creating ? 'Создаём…' : 'Создать' }}</button>
             </form>
 
-            <section v-if="projects.templates.length" class="mt-10 rounded-2xl border border-emerald-900/10 bg-white p-5 shadow-sm">
-                <div class="flex items-center justify-between gap-4"><div><p class="eyebrow">Шаблоны</p><h2 class="mt-2 text-xl font-semibold">Параметрические изделия</h2></div><span class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">{{ projects.templates.length }}</span></div>
+            <details v-if="projects.templates.length" class="mt-8 rounded-2xl border border-emerald-900/10 bg-white p-5 shadow-sm">
+                <summary class="cursor-pointer text-base font-semibold text-emerald-900">Создать из шаблона <span class="ml-2 text-sm font-normal text-stone-500">{{ projects.templates.length }} сохранённых вариантов</span></summary>
                 <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <article v-for="template in projects.templates" :key="template.id" class="rounded-xl border border-stone-200 p-4" :class="{ 'border-emerald-500 bg-emerald-50/40': selectedTemplateId === template.id }">
                         <div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block truncate text-sm text-stone-800">{{ template.name }}</strong><small class="mt-1 block text-stone-400">{{ template.part_count }} типов деталей</small></div><button class="text-stone-300 hover:text-red-600" type="button" title="Удалить шаблон" @click="removeTemplate(template)">×</button></div>
@@ -36,20 +36,27 @@
                     </div>
                     <div class="mt-4 flex items-center justify-between gap-4"><p class="text-xs text-white/50">Заготовки, позиции и операции будут пересчитаны.</p><button class="button-accent" type="submit" :disabled="instantiatingTemplate">{{ instantiatingTemplate ? 'Создаём…' : 'Создать проект' }}</button></div>
                 </form>
-            </section>
+            </details>
+
+            <div v-if="projects.items.length" class="project-list-toolbar">
+                <h2>Мои проекты <span>{{ projects.items.length }}</span></h2>
+                <label><span class="sr-only">Поиск проектов</span><input v-model="search" class="field-input" type="search" placeholder="Найти проект…"></label>
+                <label><span class="sr-only">Порядок проектов</span><select v-model="sortOrder" class="field-input"><option value="recent">Сначала недавние</option><option value="name">По названию</option></select></label>
+            </div>
+            <p v-if="error" role="alert" class="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-700">{{ error }}</p>
 
             <div v-if="projects.loading" class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 <div v-for="index in 3" :key="index" class="h-72 animate-pulse rounded-2xl bg-stone-200"></div>
             </div>
 
             <div v-else-if="projects.items.length" class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                <article v-for="project in projects.items" :key="project.id" class="project-card group">
+                <article v-for="project in filteredProjects" :key="project.id" class="project-card group">
                     <router-link :to="{ name: 'editor', params: { id: project.id } }" class="project-preview">
                         <div class="preview-grid" aria-hidden="true"></div>
                         <div class="preview-object" aria-hidden="true">
                             <span></span><span></span><span></span>
                         </div>
-                        <span class="absolute top-4 left-4 rounded-full bg-white/90 px-3 py-1 text-[10px] font-bold tracking-[0.16em] text-emerald-900 uppercase">Черновик</span>
+                        <span class="project-preview-label">Изделие <span aria-hidden="true">↗</span></span>
                     </router-link>
                     <div class="p-5">
                         <div class="flex items-start justify-between gap-4">
@@ -67,7 +74,9 @@
                 </article>
             </div>
 
-            <div v-else class="empty-state mt-10">
+            <p v-if="projects.items.length && !filteredProjects.length" class="empty-state mt-6">Нет проектов с таким названием. Измените поисковый запрос.</p>
+
+            <div v-if="!projects.loading && !projects.items.length" class="empty-state mt-10">
                 <div class="empty-state-mark">＋</div>
                 <h2 class="mt-5 text-xl font-semibold">Пока нет проектов</h2>
                 <p class="mt-2 text-sm text-stone-500">Создайте первый проект — мы подготовим для него пустую 3D-сцену.</p>
@@ -87,6 +96,12 @@ const projects = useProjectsStore();
 const router = useRouter();
 const showCreateForm = ref(false);
 const creating = ref(false);
+const search = ref('');
+const sortOrder = ref('recent');
+const error = ref('');
+const filteredProjects = computed(() => projects.items
+    .filter((project) => `${project.name} ${project.description ?? ''}`.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
+    .slice().sort((a, b) => sortOrder.value === 'name' ? a.name.localeCompare(b.name, 'ru') : new Date(b.updated_at) - new Date(a.updated_at)));
 const selectedTemplateId = ref(null);
 const instantiatingTemplate = ref(false);
 const newProject = reactive({ name: '', description: '' });
@@ -102,10 +117,13 @@ onMounted(() => Promise.all([projects.fetchProjects(), projects.fetchProjectTemp
 
 const createProject = async () => {
     creating.value = true;
+    error.value = '';
 
     try {
         const project = await projects.createProject(newProject);
         await router.push({ name: 'editor', params: { id: project.id } });
+    } catch (failure) {
+        error.value = failure.response?.data?.message ?? 'Не удалось создать проект. Попробуйте ещё раз.';
     } finally {
         creating.value = false;
     }

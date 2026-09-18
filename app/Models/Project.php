@@ -28,6 +28,7 @@ class Project extends Model
     {
         return [
             'scene_data' => 'array',
+            'script_data' => 'array',
             'revision' => 'integer',
         ];
     }
@@ -55,5 +56,10 @@ class Project extends Model
     public function projectConnections(): HasMany
     {
         return $this->hasMany(ProjectConnection::class);
+    }
+
+    public function projectVersions(): HasMany
+    {
+        return $this->hasMany(ProjectVersion::class);
     }
 }

@@ -14,6 +14,17 @@ class ProjectAnalysisControllerTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
+    public function test_diagnostics_use_the_instance_center_for_z_bounds(): void
+    {
+        $project = Project::factory()->create();
+        $part = PartDefinition::factory()->for($project)->create(['length' => 100, 'width' => 40, 'thickness' => 20]);
+        PartInstance::factory()->for($part)->create(['position_z' => 10]);
+        Sanctum::actingAs($project->user, ['projects:read']);
+        $response = $this->getJson("/api/v1/projects/{$project->id}/analysis")->assertOk();
+        $this->assertEquals(0, $response->json('data.diagnostics.summary.bounds.min.z'));
+        $this->assertEquals(20, $response->json('data.diagnostics.summary.bounds.max.z'));
+    }
+
     public function test_analysis_returns_diagnostics_bill_of_materials_and_cutting_maps(): void
     {
         $user = User::factory()->create();

@@ -255,7 +255,7 @@ class ProjectDiagnostics
                 + abs($rotation[$row][2]) * $halfSize[2];
         }
 
-        $center = [$instance->position_x, $instance->position_y, $instance->position_z + $part->thickness / 2];
+        $center = [$instance->position_x, $instance->position_y, $instance->position_z];
 
         return [
             'min' => ['x' => $center[0] - $extent[0], 'y' => $center[1] - $extent[1], 'z' => $center[2] - $extent[2]],

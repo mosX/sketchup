@@ -61,6 +61,9 @@ class ExecuteProjectCommandsRequest extends FormRequest
     public function after(): array
     {
         return [function (Validator $validator): void {
+            if ($validator->errors()->isNotEmpty()) {
+                return;
+            }
             foreach ($this->input('commands', []) as $index => $command) {
                 if (! is_array($command) || ! isset($command['type'])) {
                     continue;
@@ -70,14 +73,19 @@ class ExecuteProjectCommandsRequest extends FormRequest
 
                 if ($command['type'] === 'create_part' && is_array($command['data'] ?? null)) {
                     $data = $command['data'];
-                    $commandValidator->after(fn (Validator $childValidator) => $this->validatePartOperations(
-                        $childValidator,
-                        $data['operations'] ?? [],
-                        (float) ($data['length'] ?? 0),
-                        (float) ($data['width'] ?? 0),
-                        (float) ($data['thickness'] ?? 0),
-                        'data.operations',
-                    ));
+                    $commandValidator->after(function (Validator $childValidator) use ($data): void {
+                        if ($childValidator->errors()->isNotEmpty()) {
+                            return;
+                        }
+                        $this->validatePartOperations(
+                            $childValidator,
+                            $data['operations'] ?? [],
+                            (float) ($data['length'] ?? 0),
+                            (float) ($data['width'] ?? 0),
+                            (float) ($data['thickness'] ?? 0),
+                            'data.operations',
+                        );
+                    });
                 }
 
                 foreach ($commandValidator->errors()->messages() as $field => $messages) {

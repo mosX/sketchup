@@ -12,7 +12,9 @@ use App\Http\Controllers\PartDefinitionController;
 use App\Http\Controllers\PartInstanceController;
 use App\Http\Controllers\ProjectConnectionController;
 use App\Http\Controllers\ProjectController;
+use App\Http\Controllers\ProjectScriptController;
 use App\Http\Controllers\ProjectTemplateController;
+use App\Http\Controllers\ProjectVersionController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('throttle:5,1')->group(function (): void {
@@ -31,6 +33,13 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/project-templates/{projectTemplate}/instantiate', [ProjectTemplateController::class, 'instantiate']);
     Route::delete('/project-templates/{projectTemplate}', [ProjectTemplateController::class, 'destroy']);
     Route::scopeBindings()->middleware('token.project')->group(function (): void {
+        Route::get('/projects/{project}/script', [ProjectScriptController::class, 'show'])->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/versions', [ProjectVersionController::class, 'index'])->middleware('ability:projects:read,projects:write');
+        Route::post('/projects/{project}/versions', [ProjectVersionController::class, 'store'])->middleware(['abilities:projects:write', 'throttle:20,1']);
+        Route::post('/projects/{project}/versions/{projectVersion}/restore', [ProjectVersionController::class, 'restore'])->middleware(['abilities:projects:write', 'throttle:10,1']);
+        Route::put('/projects/{project}/script', [ProjectScriptController::class, 'update'])->middleware('abilities:projects:write');
+        Route::post('/projects/{project}/script/run', [ProjectScriptController::class, 'run'])->middleware(['abilities:projects:write', 'throttle:30,1']);
+        Route::post('/projects/{project}/script/detach', [ProjectScriptController::class, 'detach'])->middleware('abilities:projects:write');
         Route::apiResource('projects.parts', PartDefinitionController::class)
             ->parameters(['parts' => 'partDefinition']);
         Route::post('/projects/{project}/parts/{partDefinition}/instances', [PartInstanceController::class, 'store']);
