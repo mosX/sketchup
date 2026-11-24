@@ -2,7 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\PartDefinition;
+use App\Models\PartInstance;
 use App\Models\Project;
+use App\Models\ProjectConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -11,6 +14,58 @@ use Tests\TestCase;
 class ProjectCommandControllerTest extends TestCase
 {
     use LazilyRefreshDatabase;
+
+    public function test_transform_can_replace_a_single_instances_part_with_a_batch_variant(): void
+    {
+        $project = Project::factory()->create(['revision' => 1]);
+        $original = PartDefinition::factory()->for($project)->create();
+        $selected = PartInstance::factory()->for($original)->create();
+        $other = PartInstance::factory()->for($original)->create();
+        Sanctum::actingAs($project->user, ['projects:write']);
+
+        $response = $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 1,
+            'commands' => [
+                $this->createLegCommand(),
+                ['type' => 'transform_instance', 'instance_id' => $selected->id, 'part_ref' => 'leg', 'data' => ['position_z' => 40]],
+            ],
+        ])->assertOk()->assertJsonPath('data.revision', 2);
+
+        $variant = $response->json('data.results.0.part_id');
+        $this->assertSame($variant, $selected->fresh()->part_definition_id);
+        $this->assertSame($original->id, $other->fresh()->part_definition_id);
+
+        $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 2,
+            'commands' => [['type' => 'transform_instance', 'instance_id' => $selected->id, 'part_id' => $original->id, 'data' => ['position_z' => 0]]],
+        ])->assertOk();
+        $this->assertSame($original->id, $selected->fresh()->part_definition_id);
+    }
+
+    public function test_transform_rejects_a_foreign_part_or_linked_instance_and_rolls_back(): void
+    {
+        $project = Project::factory()->create(['revision' => 1]);
+        $instance = PartInstance::factory()->for($project)->for(PartDefinition::factory()->for($project))->create();
+        $foreignPart = PartDefinition::factory()->create();
+        Sanctum::actingAs($project->user, ['projects:write']);
+
+        $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 1,
+            'commands' => [['type' => 'transform_instance', 'instance_id' => $instance->id, 'part_id' => $foreignPart->id, 'data' => ['position_x' => 10]]],
+        ])->assertNotFound();
+
+        ProjectConnection::factory()->create(['primary_instance_id' => $instance->id]);
+        $partCount = PartDefinition::query()->count();
+        $this->postJson("/api/v1/projects/{$project->id}/commands", [
+            'expected_revision' => 1,
+            'commands' => [
+                $this->createLegCommand(),
+                ['type' => 'transform_instance', 'instance_id' => $instance->id, 'part_ref' => 'leg', 'data' => ['position_x' => 10]],
+            ],
+        ])->assertUnprocessable()->assertJsonValidationErrors('commands.1.part_id');
+        $this->assertDatabaseCount('part_definitions', $partCount);
+        $this->assertSame(1, $project->fresh()->revision);
+    }
 
     public function test_dry_run_validates_batch_without_persisting_changes(): void
     {

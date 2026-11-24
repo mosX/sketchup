@@ -10,6 +10,49 @@ export const partSize = (part) => ({
     thickness: Number(part.dimensions.thickness) * millimeterScale,
 });
 
+const editorToSceneBasis = new THREE.Matrix4().set(
+    1, 0, 0, 0,
+    0, 0, 1, 0,
+    0, 1, 0, 0,
+    0, 0, 0, 1,
+);
+const editorEuler = new THREE.Euler(0, 0, 0, 'ZYX');
+const editorRotationMatrix = new THREE.Matrix4();
+const sceneRotationMatrix = new THREE.Matrix4();
+
+export const setScenePose = (object, position, rotation) => {
+    object.position.set(
+        Number(position.x) * millimeterScale,
+        Number(position.z) * millimeterScale,
+        Number(position.y) * millimeterScale,
+    );
+    editorEuler.set(
+        THREE.MathUtils.degToRad(Number(rotation.x)),
+        THREE.MathUtils.degToRad(Number(rotation.y)),
+        THREE.MathUtils.degToRad(Number(rotation.z)),
+    );
+    editorRotationMatrix.makeRotationFromEuler(editorEuler);
+    sceneRotationMatrix.copy(editorToSceneBasis).multiply(editorRotationMatrix).multiply(editorToSceneBasis);
+    object.quaternion.setFromRotationMatrix(sceneRotationMatrix);
+};
+
+export const setPartEditingFrame = (group, part, instance) => {
+    if (instance) {
+        setScenePose(group, instance.position, instance.rotation);
+        group.scale.x = instance.mirrored ? -1 : 1;
+    } else {
+        group.position.set(0, partSize(part).thickness / 2, 0);
+        group.quaternion.identity();
+        group.scale.x = 1;
+    }
+    group.updateMatrixWorld(true);
+};
+
+export const partFaceDragPlane = (group, frame) => {
+    group.updateWorldMatrix(true, false);
+    return new THREE.Plane().setFromNormalAndCoplanarPoint(frame.inward, frame.center).applyMatrix4(group.matrixWorld);
+};
+
 export const grooveFaceFrame = (part, face) => {
     const { length, width, thickness } = partSize(part);
 

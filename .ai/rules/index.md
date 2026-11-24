@@ -18,12 +18,15 @@ Before planning or editing, find the row whose globs match the file's path and r
 | resources/js/components/ThreeViewport.vue,resources/js/pages/Editor.vue,app/Http/Requests/ValidatesPartOperations.php | .ai/rules/http-requests.md |
 | app/Http/** | .ai/rules/http.md |
 | resources/js/editor/geometry/**,resources/js/workers/csg.worker.js,resources/js/components/ThreeViewport.vue | .ai/rules/js-components.md |
+| resources/js/pages/Editor.vue,resources/js/components/ThreeViewport.vue,resources/js/editor/assemblyTree.js | .ai/rules/js-editor.md |
 | app/Http/Requests/**,resources/js/** | .ai/rules/js.md |
 | mcp-server/** | .ai/rules/mcp-server.md |
+| app/Mcp/**,routes/ai.php | .ai/rules/mcp.md |
 | app/Services/ProjectTemplateManager.php,app/Models/ProjectTemplate.php | .ai/rules/models.md |
 | resources/js/components/ThreeViewport.vue,resources/js/pages/Editor.vue | .ai/rules/pages.md |
 | routes/api.php,app/Http/Controllers/Api/V1/**,app/Actions/Projects/** | .ai/rules/projects.md |
 | resources/js/pages/Editor.vue,app/Http/Requests/ValidatesPartOperations.php | .ai/rules/requests.md |
 | resources/js/** | .ai/rules/resources-js.md |
 | app/Services/ProjectTemplateManager.php | .ai/rules/services.md |
+| resources/js/components/ThreeViewport.vue,resources/js/pages/Editor.vue,resources/js/editor/assemblyMove.js,resources/js/stores/projects.js | .ai/rules/stores.md |
 | app/Http/Controllers/Api/V1/CapabilityController.php | .ai/rules/v1.md |

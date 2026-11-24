@@ -88,6 +88,52 @@ export const useProjectsStore = defineStore('projects', {
             return this.parts;
         },
 
+        async moveAssemblyInstances(projectId, before, after, axis) {
+            const { data: { data: snapshot } } = await axios.get(`/v1/projects/${projectId}`);
+            const saved = new Map(snapshot.parts.flatMap(part => part.instances.map(instance => [instance.id, instance])));
+            if (before.some(({ id, position }) => Number(saved.get(id)?.position[axis]) !== Number(position[axis]))) {
+                throw new Error('Положение деталей изменилось. Обновите сборку перед перемещением.');
+            }
+
+            const commands = after.map(({ id, position }) => ({
+                type: 'transform_instance',
+                instance_id: id,
+                data: { [`position_${axis}`]: position[axis] },
+            }));
+            await axios.post(`/v1/projects/${projectId}/commands`, {
+                expected_revision: snapshot.revision,
+                dry_run: false,
+                commands,
+            });
+
+            const positions = new Map(after.map(({ id, position }) => [id, position[axis]]));
+            for (const part of this.parts) {
+                for (const instance of part.instances ?? []) {
+                    if (positions.has(instance.id)) instance.position[axis] = positions.get(instance.id);
+                }
+            }
+        },
+
+        async applyAssemblyScale(projectId, expected, commands) {
+            const { data: { data: snapshot } } = await axios.get(`/v1/projects/${projectId}`);
+            const saved = new Map(snapshot.parts.flatMap(part => part.instances.map(instance => [instance.id, { instance, part }])));
+            for (const { id, partId, position, rotation, partUpdatedAt } of expected) {
+                const current = saved.get(id);
+                const sameAxes = (a, b) => ['x', 'y', 'z'].every(axis => Number(a[axis]) === Number(b[axis]));
+                if (!current || current.part.id !== partId || !sameAxes(current.instance.position, position)
+                    || (rotation && !sameAxes(current.instance.rotation, rotation))
+                    || (partUpdatedAt && current.part.updated_at !== partUpdatedAt)) {
+                    throw new Error('Сборка изменилась. Обновите проект перед масштабированием.');
+                }
+            }
+            const { data } = await axios.post(`/v1/projects/${projectId}/commands`, {
+                expected_revision: snapshot.revision,
+                dry_run: false,
+                commands,
+            });
+            return data.data.results;
+        },
+
         async fetchAssemblyGroups(projectId) {
             const { data } = await axios.get(`/projects/${projectId}/assembly-groups`);
             this.assemblyGroups = data.data;

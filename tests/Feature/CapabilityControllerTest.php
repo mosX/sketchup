@@ -20,7 +20,7 @@ class CapabilityControllerTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.schema_version', 10)
+            ->assertJsonPath('data.schema_version', 11)
             ->assertJsonPath('data.part_operations.groove.1', 'center_u')
             ->assertJsonPath('data.part_operations.edge_roundover.1', 'radius')
             ->assertJsonPath('data.part_operations.plunge_route.7', 'cutter_profile')

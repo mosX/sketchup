@@ -2,8 +2,10 @@
 
 use App\Http\Controllers\Api\V1\ApiTokenController;
 use App\Http\Controllers\Api\V1\CapabilityController;
+use App\Http\Controllers\Api\V1\CatalogMaterialController;
 use App\Http\Controllers\Api\V1\ProjectAnalysisController;
 use App\Http\Controllers\Api\V1\ProjectCommandController;
+use App\Http\Controllers\Api\V1\ProjectMaterialsController;
 use App\Http\Controllers\Api\V1\ProjectSnapshotController;
 use App\Http\Controllers\Api\V1\ProjectValidationController;
 use App\Http\Controllers\AssemblyGroupController;
@@ -59,6 +61,12 @@ Route::middleware('auth:sanctum')->group(function (): void {
 });
 
 Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(function (): void {
+    Route::get('/materials', [CatalogMaterialController::class, 'index'])
+        ->middleware(['ability:projects:read,projects:write', 'token.project']);
+    Route::post('/materials', [CatalogMaterialController::class, 'store'])
+        ->middleware(['abilities:projects:write', 'token.project']);
+    Route::put('/materials/{catalogMaterial}', [CatalogMaterialController::class, 'update'])
+        ->middleware(['abilities:projects:write', 'token.project']);
     Route::get('/api-tokens', [ApiTokenController::class, 'index']);
     Route::post('/api-tokens', [ApiTokenController::class, 'store']);
     Route::delete('/api-tokens/{apiToken}', [ApiTokenController::class, 'destroy']);
@@ -133,5 +141,15 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
             ->middleware('ability:projects:read,projects:write');
         Route::get('/projects/{project}/analysis', ProjectAnalysisController::class)
             ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/materials', [ProjectMaterialsController::class, 'show'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::put('/projects/{project}/materials', [ProjectMaterialsController::class, 'update'])
+            ->middleware('abilities:projects:write');
+        Route::get('/projects/{project}/estimates', [ProjectMaterialsController::class, 'estimates'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/estimates/{projectEstimate}', [ProjectMaterialsController::class, 'estimate'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::post('/projects/{project}/estimates', [ProjectMaterialsController::class, 'storeEstimate'])
+            ->middleware('abilities:projects:write');
     });
 });

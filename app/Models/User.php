@@ -24,6 +24,11 @@ class User extends Authenticatable
         return $this->hasMany(Project::class);
     }
 
+    public function catalogMaterials(): HasMany
+    {
+        return $this->hasMany(CatalogMaterial::class);
+    }
+
     public function projectTemplates(): HasMany
     {
         return $this->hasMany(ProjectTemplate::class);

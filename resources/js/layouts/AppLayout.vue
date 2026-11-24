@@ -1,7 +1,7 @@
 <template>
     <div class="workshop-layout min-h-screen text-stone-950">
         <header class="border-b border-stone-200 bg-white/95 backdrop-blur">
-            <div class="mx-auto flex h-18 max-w-7xl items-center justify-between gap-6 px-5 lg:px-8">
+            <div class="mx-auto flex min-h-18 max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:gap-6 sm:px-5 lg:px-8">
                 <router-link :to="{ name: 'projects' }" class="flex shrink-0 items-center gap-3">
                     <span class="brand-mark">W</span>
                     <span class="hidden sm:block">
@@ -16,6 +16,11 @@
                         class="rounded-lg px-2 py-2 text-xs font-semibold text-stone-500 transition hover:text-emerald-900 sm:px-3"
                         active-class="bg-white text-emerald-900 shadow-sm"
                     >Проекты</router-link>
+                    <router-link
+                        :to="{ name: 'materials' }"
+                        class="rounded-lg px-2 py-2 text-xs font-semibold text-stone-500 transition hover:text-emerald-900 sm:px-3"
+                        active-class="bg-white text-emerald-900 shadow-sm"
+                    >Материалы</router-link>
                     <router-link
                         :to="{ name: 'api-tokens' }"
                         class="rounded-lg px-2 py-2 text-xs font-semibold text-stone-500 transition hover:text-emerald-900 sm:px-3"

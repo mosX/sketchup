@@ -13,8 +13,8 @@
             </div>
 
             <div class="editor-mode-switch" aria-label="Режим редактора">
-                <button type="button" :class="{ active: editorMode === 'assembly' }" @click="editorMode = 'assembly'">Сборка</button>
-                <button type="button" :class="{ active: editorMode === 'part' }" @click="openPart(activePart ?? projects.parts[0])">Заготовка</button>
+                <button type="button" :class="{ active: editorMode === 'assembly' }" @click="returnToAssembly">Сборка</button>
+                <button type="button" :class="{ active: editorMode === 'part' }" @click="openCurrentPart">Заготовка</button>
             </div>
 
             <div class="flex items-center gap-1 rounded-xl border border-stone-200 bg-white p-1" aria-label="История изменений">
@@ -36,7 +36,7 @@
                 >↷</button>
             </div>
 
-            <button class="button-secondary button-compact" type="button" @click="openProjectAnalysis">Анализ и раскрой</button>
+            <button class="button-secondary button-compact" type="button" @click="openProjectAnalysis()">Анализ и раскрой</button>
             <details class="workspace-menu" @keydown.esc="$event.currentTarget.open = false">
                 <summary class="button-secondary button-compact">Ещё <span aria-hidden="true">⌄</span></summary>
                 <div class="workspace-menu-items" @click="$event.currentTarget.parentElement.open = false">
@@ -69,8 +69,8 @@
         <div v-else class="editor-workspace editor-workspace-parts">
             <aside class="parts-library">
                 <div class="grid grid-cols-2 border-b border-stone-200 bg-stone-50 p-2">
-                    <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'library' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-400'" type="button" @click="leftPanelMode = 'library'">Заготовки</button>
-                    <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'assembly' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-400'" type="button" @click="leftPanelMode = 'assembly'; editorMode = 'assembly'">Структура</button>
+                    <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'assembly' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-500'" type="button" @click="leftPanelMode = 'assembly'; editorMode = 'assembly'">Сборка</button>
+                    <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'library' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-500'" type="button" @click="leftPanelMode = 'library'">Заготовки</button>
                 </div>
 
                 <template v-if="leftPanelMode === 'library'">
@@ -121,28 +121,24 @@
                         <button class="library-add-button" type="button" title="Создать сборочный узел" aria-label="Создать сборочный узел" @click="createAssemblyGroup">＋</button>
                     </div>
                     <div class="border-b border-stone-100 px-3 pb-3">
-                        <input v-model="assemblySearch" class="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs outline-none focus:border-emerald-500" placeholder="Поиск по структуре">
+                        <button v-if="activeAssemblyGroup" class="mb-2 inline-flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50" type="button" aria-keyshortcuts="Alt+ArrowUp" @click="openParentAssemblyGroup">← На уровень выше <kbd>Alt+↑</kbd></button>
+                        <input v-model="assemblySearch" type="search" aria-label="Поиск на текущем уровне" class="w-full rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs outline-none focus:border-emerald-500" placeholder="Поиск на этом уровне…">
+                        <p v-if="projects.assemblyGroups.length" class="mt-2 text-xs leading-5 text-stone-500">На сцене: клик выбирает узел, двойной клик открывает его.</p>
                     </div>
                     <div v-if="assemblyRows.length" class="min-h-0 flex-1 overflow-y-auto p-2">
                         <template v-for="row in assemblyRows" :key="row.id">
                             <div
                                 v-if="row.kind === 'group'"
-                                class="group flex items-center gap-1 rounded-lg py-1 pr-1 text-xs hover:bg-stone-100"
+                                class="flex items-center gap-1 rounded-lg px-1 py-1 text-xs hover:bg-stone-100"
                                 :class="{ 'bg-emerald-50 text-emerald-900': selectedGroupId === row.group.id }"
-                                :style="{ paddingLeft: `${6 + row.depth * 14}px` }"
                             >
-                                <button class="grid size-6 shrink-0 place-items-center text-stone-400" type="button" @click="toggleGroupCollapsed(row.group.id)">{{ isGroupCollapsed(row.group.id) ? '›' : '⌄' }}</button>
-                                <button class="min-w-0 flex-1 truncate text-left font-semibold" type="button" @click="selectAssemblyGroup(row.group)">▰ {{ row.group.name }}</button>
-                                <button class="grid size-6 place-items-center rounded text-[11px] text-stone-400 hover:bg-white" type="button" :title="row.group.is_visible ? 'Скрыть узел' : 'Показать узел'" @click="toggleGroupVisibility(row.group)">{{ row.group.is_visible ? '◉' : '○' }}</button>
-                                <button class="grid size-6 place-items-center rounded text-[11px] text-stone-400 hover:bg-white" type="button" :class="{ 'bg-sky-100 text-sky-700': isGroupGhosted(row.group.id) }" :title="isGroupGhosted(row.group.id) ? 'Вернуть обычный вид узла' : 'Сделать узел полупрозрачным'" @click="toggleGroupGhost(row.group.id)">◐</button>
-                                <button class="grid size-6 place-items-center rounded text-[11px] text-stone-400 hover:bg-white" type="button" :class="{ 'bg-amber-100 text-amber-700': isolatedGroupId === row.group.id }" title="Изолировать узел" @click="toggleGroupIsolation(row.group.id)">S</button>
-                                <button class="grid size-6 place-items-center rounded text-stone-400 hover:bg-white" type="button" title="Открыть как отдельное изделие" @click="openAssemblyGroup(row.group.id)">↗</button>
+                                <button class="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-semibold" type="button" :title="row.group.name" @click="openAssemblyGroup(row.group.id)"><span class="text-emerald-700" aria-hidden="true">▰</span><span class="min-w-0 flex-1 truncate">{{ row.group.name }}</span><span class="text-lg text-stone-400" aria-hidden="true">›</span></button>
+                                <button class="grid size-8 shrink-0 place-items-center rounded text-stone-500 hover:bg-white" type="button" :aria-label="row.group.is_visible ? 'Скрыть узел' : 'Показать узел'" :title="row.group.is_visible ? 'Скрыть узел' : 'Показать узел'" @click="toggleGroupVisibility(row.group)">{{ row.group.is_visible ? '◉' : '○' }}</button>
                             </div>
                             <div
                                 v-else
-                                class="flex w-full items-center gap-2 rounded-lg py-1.5 pr-2 text-left text-xs text-stone-500 hover:bg-stone-100"
+                                class="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-xs text-stone-500 hover:bg-stone-100"
                                 :class="{ 'bg-emerald-50 text-emerald-900': selectedInstanceId === row.instance.id }"
-                                :style="{ paddingLeft: `${18 + row.depth * 14}px` }"
                             >
                                 <button class="flex min-w-0 flex-1 items-center gap-2 text-left" type="button" @click="selectInstance(row.instance.id)"><span>◇</span><span class="min-w-0 flex-1 truncate">{{ row.part.name }}</span><small>#{{ row.instance.id }}</small></button>
                                 <button
@@ -157,7 +153,7 @@
                         </template>
                     </div>
                     <div v-else class="p-5 text-center text-xs leading-5 text-stone-400">
-                        Создайте узел, например «Каркас» или «Крыша», затем назначьте ему детали.
+                        {{ assemblySearch.trim() ? 'На этом уровне ничего не найдено.' : activeAssemblyGroup ? 'Этот узел пока пуст. Добавьте деталь из заготовок или создайте вложенный узел.' : 'Сборка пока пуста. Создайте узел или добавьте деталь из заготовок.' }}
                     </div>
                 </template>
             </aside>
@@ -178,10 +174,19 @@
                                 <input v-model.number="explodeDistance" class="w-28 accent-emerald-700" type="range" min="50" max="1000" step="25">
                             </label>
                         </div>
+                        <button class="view-tab" type="button" disabled>Спереди</button>
+                        <button class="view-tab" type="button" disabled>Сверху</button>
                     </template>
-                    <button v-else class="view-tab view-tab-active" type="button">{{ activePart?.name || 'Заготовка' }}</button>
-                    <button class="view-tab" type="button" disabled>Спереди</button>
-                    <button class="view-tab" type="button" disabled>Сверху</button>
+                    <template v-else-if="activePart">
+                        <button class="view-tab" :class="{ 'view-tab-active': !partContextInstance }" :aria-pressed="!partContextInstance" type="button" @click="partViewMode = 'solo'">Отдельно</button>
+                        <button class="view-tab disabled:opacity-50" :class="{ 'view-tab-active': partContextInstance }" :aria-pressed="Boolean(partContextInstance)" :disabled="!activePart.instances?.length" type="button" @click="partViewMode = 'assembly'">В сборке</button>
+                        <label v-if="partContextInstance && activePart.instances.length > 1" class="flex shrink-0 items-center gap-2 px-2 text-xs text-stone-600">
+                            Экземпляр
+                            <select v-model.number="partContextInstanceId" class="max-w-36 rounded-md border border-stone-200 bg-white px-1.5 py-1">
+                                <option v-for="instance in activePart.instances" :key="instance.id" :value="instance.id">#{{ instance.id }}{{ instance.mirrored ? ' · зеркало' : '' }}</option>
+                            </select>
+                        </label>
+                    </template>
                 </div>
 
                 <div v-if="editorMode === 'assembly' && sectionAxis" class="absolute right-4 top-14 z-4 grid w-64 gap-3 rounded-xl border border-stone-200 bg-white/95 p-4 shadow-xl backdrop-blur">
@@ -191,12 +196,12 @@
                     </div>
                     <label class="grid gap-1.5 text-[10px] font-semibold text-stone-500">Смещение, мм
                         <input v-model.number="sectionOffset" class="w-full accent-amber-600" type="range" min="-5000" max="5000" step="10">
-                        <input v-model.number="sectionOffset" class="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500" type="number" step="1">
+                        <input v-scrub-number v-model.number="sectionOffset" class="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500" type="number" step="1">
                     </label>
                     <label class="flex items-center gap-2 text-xs text-stone-600"><input v-model="sectionInverted" class="accent-emerald-700" type="checkbox">Показать противоположную сторону</label>
                 </div>
 
-                <div v-if="assemblyGuideActive && currentAssemblyGuideStep" class="absolute right-4 bottom-14 z-4 w-72 rounded-xl border border-emerald-900/15 bg-white/95 p-4 shadow-xl backdrop-blur">
+                <div v-if="editorMode === 'assembly' && assemblyGuideActive && currentAssemblyGuideStep" class="absolute right-4 bottom-14 z-4 w-72 rounded-xl border border-emerald-900/15 bg-white/95 p-4 shadow-xl backdrop-blur">
                     <div class="flex items-start justify-between gap-3">
                         <div><small class="font-semibold text-emerald-700">Шаг {{ assemblyGuideStep + 1 }} из {{ assemblyGuideSteps.length }}</small><strong class="mt-1 block text-sm text-stone-800">{{ currentAssemblyGuideStep.name }}</strong></div>
                         <button class="text-lg leading-none text-stone-400 hover:text-stone-700" type="button" aria-label="Закрыть режим сборки" @click="finishAssemblyGuide">×</button>
@@ -212,11 +217,19 @@
                     :mode="editorMode"
                     :parts="projects.parts"
                     :active-part="partPreview"
+                    :part-context-instance="partContextInstance"
+                    :part-context-visible-instance-ids="partContextVisibleInstanceIds"
                     :selected-instance-id="selectedInstanceId"
+                    :selected-group-instance-ids="groupMoveInstanceIds"
+                    :group-move-instance-ids="groupMoveInstanceIds"
+                    :group-move-block="groupMoveBlock"
+                    :transform-busy="saveState === 'saving' || historyBusy"
+                    :commit-scale="commitScale"
+                    :pickable-instance-ids="assemblyPickableInstanceIds"
                     :selected-operation-id="selectedOperationId"
                     :visible-instance-ids="viewportVisibleInstanceIds"
                     :locked-instance-ids="assemblyInstanceState.lockedInstanceIds"
-                    :ghosted-instance-ids="ghostedAssemblyInstanceIds"
+                    :ghosted-instance-ids="viewportGhostedInstanceIds"
                     :explode-distance="explodeDistance"
                     :focused-instance-ids="viewportFocusedInstanceIds"
                     :focus-request-id="diagnosticFocusRequestId"
@@ -227,15 +240,19 @@
                     :section-inverted="sectionInverted"
                     :connections="projects.connections"
                     :selected-connection-id="selectedConnectionId"
-                    @select-instance="selectInstance"
+                    @select-instance="selectAssemblyPick"
+                    @open-instance-group="openAssemblyPick"
                     @select-connection="selectConnection"
                     @update-connection-parameters="updateConnectionParametersFromScene"
                     @commit-connection-parameters="commitConnectionParametersFromScene"
                     @select-operation="selectedOperationId = $event"
                     @update-operation="updateOperationFromScene"
                     @commit-instance-transform="commitInstanceTransform"
+                    @commit-group-move="commitGroupMove"
+                    @blocked-group-move="groupMoveError = $event"
                 />
 
+                <p v-if="groupMoveError" class="scene-transform-hud" role="alert">{{ groupMoveError }}</p>
                 <div class="status-bar">
                     <span>Сетка: 50 мм</span>
                     <span>Единицы: мм</span>
@@ -243,28 +260,28 @@
                 </div>
             </main>
 
-            <aside class="inspector-panel">
+            <aside class="inspector-panel" aria-label="Свойства выделения">
                 <template v-if="editorMode === 'part' && partDraft">
-                    <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Заготовка</h2>
-                            <span class="status-pill">Связанная</span>
-                        </div>
-                        <label class="editor-field mt-4">Название<input v-model="partDraft.name"></label>
-                        <label class="editor-field mt-3">Материал<input v-model="partDraft.material" placeholder="Например, дуб"></label>
+                    <div class="inspector-section inspector-context">
+                        <span class="inspector-kicker">Заготовка</span>
+                        <h2 class="inspector-name truncate" :title="partDraft.name">{{ partDraft.name }}</h2>
+                        <p v-if="activePart?.instances?.length > 1" class="mt-1 text-xs text-stone-500">Изменится экземпляров: {{ activePart.instances.length }}</p>
                     </div>
-
                     <div class="inspector-section">
                         <h2 class="inspector-heading">Размеры, мм</h2>
-                        <div class="mt-4 grid grid-cols-3 gap-2">
-                            <label class="dimension-field"><span>Длина</span><input v-model.number="partDraft.dimensions.length" type="number" min="1"></label>
-                            <label class="dimension-field"><span>Ширина</span><input v-model.number="partDraft.dimensions.width" type="number" min="1"></label>
-                            <label class="dimension-field"><span>Толщина</span><input v-model.number="partDraft.dimensions.thickness" type="number" min="1"></label>
+                        <div class="inspector-values">
+                            <label v-for="field in stockDimensionFields" :key="field.key" class="dimension-field"><span>{{ field.label }}</span><input v-scrub-number v-model.number="partDraft.dimensions[field.key]" type="number" min="1"></label>
                         </div>
-                        <label class="editor-field mt-4">Направление волокон
-                            <select v-model="partDraft.grain_axis"><option value="length">Вдоль длины</option><option value="width">Вдоль ширины</option></select>
-                        </label>
                     </div>
+                    <details class="inspector-section inspector-disclosure">
+                        <summary>Данные заготовки</summary>
+                        <div class="inspector-disclosure-body grid gap-2">
+                            <label class="editor-field inspector-inline-field">Название<input v-model="partDraft.name"></label>
+                            <label class="editor-field inspector-inline-field">Материал<input v-model="partDraft.material" placeholder="Например, дуб"></label>
+                            <button class="button-secondary button-compact justify-self-start" type="button" @click="openProjectAnalysis(activePart.id)">Материал для раскроя</button>
+                            <label class="editor-field inspector-inline-field">Волокна<select v-model="partDraft.grain_axis"><option value="length">Вдоль длины</option><option value="width">Вдоль ширины</option></select></label>
+                        </div>
+                    </details>
 
                     <div class="inspector-section">
                         <div class="flex items-center justify-between gap-3">
@@ -273,12 +290,7 @@
                         </div>
 
                         <div class="operation-add-grid">
-                            <button type="button" @click="addOperation('cross_cut')"><span>╱</span>Поперечный рез</button>
-                            <button type="button" @click="addOperation('rip_cut')"><span>↗</span>Продольный рез</button>
-                            <button type="button" @click="addOperation('groove')"><span>⊔</span>Паз пилой</button>
-                            <button type="button" @click="addOperation('edge_roundover')"><span>◜</span>Кромочный фрезер</button>
-                            <button type="button" @click="addOperation('plunge_route')"><span>⌾</span>Погружной фрезер</button>
-                            <button type="button" @click="addOperation('drill')"><span>●</span>Сверление</button>
+                            <button v-for="tool in operationTools" :key="tool.type" type="button" :title="tool.label" :aria-label="tool.label" @click="addOperation(tool.type)"><span aria-hidden="true">{{ tool.icon }}</span>{{ tool.caption }}</button>
                         </div>
 
                         <div class="operation-section-label">
@@ -295,7 +307,7 @@
                                 @click="selectedOperationId = operation.id"
                             >
                                 <input v-model="operation.enabled" type="checkbox" aria-label="Включить операцию" @click.stop>
-                                <div><strong>{{ operationLabel(operation) }}</strong><small>{{ operationSummary(operation) }}</small></div>
+                                <button class="operation-row-summary" type="button" :title="operationSummary(operation)" :aria-pressed="selectedOperationId === operation.id" @click.stop="selectedOperationId = operation.id"><strong>{{ operationLabel(operation) }}</strong><small>{{ operationSummary(operation) }}</small></button>
                                 <div class="operation-row-actions">
                                     <button type="button" title="Выше" :disabled="index === 0" @click.stop="moveOperation(operation.id, -1)">↑</button>
                                     <button type="button" title="Ниже" :disabled="index === currentOperations.length - 1" @click.stop="moveOperation(operation.id, 1)">↓</button>
@@ -303,7 +315,7 @@
                                 </div>
                             </article>
                         </div>
-                        <p v-else class="operation-empty">Новых операций нет. Добавьте рез или выберите операцию из истории.</p>
+                        <p v-else class="operation-empty">Новых операций пока нет.</p>
 
                         <div v-if="historyOperations.length" class="operation-history">
                             <button class="operation-history-toggle" type="button" @click="historyExpanded = !historyExpanded">
@@ -324,46 +336,43 @@
                     <div v-if="selectedOperation" class="inspector-section">
                         <div class="flex items-center justify-between gap-3">
                             <h2 class="inspector-heading">{{ operationLabel(selectedOperation) }}</h2>
-                            <span class="preview-legend"><i></i> плоскость реза</span>
                         </div>
 
                         <template v-if="selectedOperation.type === 'cross_cut'">
-                            <label class="editor-field mt-4">Положение от начала, мм<input v-model.number="selectedOperation.position" type="number" min="0" :max="partDraft.dimensions.length"></label>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="cut-field"><span>Угол в плане</span><div><input v-model.number="selectedOperation.miter_angle" type="number" min="-60" max="60"><b>°</b></div></label>
-                                <label class="cut-field"><span>Наклон диска</span><div><input v-model.number="selectedOperation.bevel_angle" type="number" min="-45" max="45"><b>°</b></div></label>
+                            <label class="editor-field mt-2">Положение от начала, мм<input v-scrub-number v-model.number="selectedOperation.position" type="number" min="0" :max="partDraft.dimensions.length"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="cut-field"><span>Угол в плане</span><div><input v-scrub-number v-model.number="selectedOperation.miter_angle" type="number" min="-60" max="60"><b>°</b></div></label>
+                                <label class="cut-field"><span>Наклон диска</span><div><input v-scrub-number v-model.number="selectedOperation.bevel_angle" type="number" min="-45" max="45"><b>°</b></div></label>
                             </div>
-                            <label v-if="isFullDepthCut" class="editor-field mt-3">Оставить часть<select v-model="selectedOperation.keep_side"><option value="start">До линии реза</option><option value="end">После линии реза</option></select></label>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Глубина, мм<input v-model.number="selectedOperation.cut_depth" type="number" min="0.1" :max="partDraft.dimensions.thickness" step="0.1"></label>
+                            <label v-if="isFullDepthCut" class="editor-field mt-2">Оставить часть<select v-model="selectedOperation.keep_side"><option value="start">До линии реза</option><option value="end">После линии реза</option></select></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Глубина, мм<input v-scrub-number v-model.number="selectedOperation.cut_depth" type="number" min="0.1" :max="partDraft.dimensions.thickness" step="0.1"></label>
                                 <label class="editor-field">Направление<select v-model="selectedOperation.cut_direction"><option value="top_down">Сверху вниз</option><option value="bottom_up">Снизу вверх</option></select></label>
                             </div>
-                            <label class="editor-field mt-3">Ширина пропила, мм<input v-model.number="selectedOperation.kerf" type="number" min="0" max="20" step="0.1"></label>
-                            <p class="operation-tip">При полной глубине часть отделяется. При меньшей глубине остаётся узкий пропил шириной диска.</p>
-                        </template>
+                            <label class="editor-field mt-2">Ширина пропила, мм<input v-scrub-number v-model.number="selectedOperation.kerf" type="number" min="0" max="20" step="0.1"></label>
+                            </template>
 
                         <template v-else-if="selectedOperation.type === 'rip_cut'">
-                            <div class="mt-4 grid grid-cols-2 gap-2">
+                            <div class="mt-2 grid grid-cols-2 gap-2">
                                 <label class="editor-field">Базовая кромка<select v-model="selectedOperation.reference_side"><option value="left">Левая</option><option value="right">Правая</option></select></label>
                                 <label v-if="isFullDepthCut" class="editor-field">Что оставить<select v-model="selectedOperation.keep_side"><option value="opposite">Внутреннюю часть</option><option value="reference">Часть у базы</option></select></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Отступ в начале, мм<input v-model.number="selectedOperation.start_offset" type="number" min="0" :max="partDraft.dimensions.width"></label>
-                                <label class="editor-field">Отступ в конце, мм<input v-model.number="selectedOperation.end_offset" type="number" min="0" :max="partDraft.dimensions.width"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Отступ в начале, мм<input v-scrub-number v-model.number="selectedOperation.start_offset" type="number" min="0" :max="partDraft.dimensions.width"></label>
+                                <label class="editor-field">Отступ в конце, мм<input v-scrub-number v-model.number="selectedOperation.end_offset" type="number" min="0" :max="partDraft.dimensions.width"></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="cut-field"><span>Наклон диска</span><div><input v-model.number="selectedOperation.bevel_angle" type="number" min="-45" max="45"><b>°</b></div></label>
-                                <label class="editor-field">Пропил, мм<input v-model.number="selectedOperation.kerf" type="number" min="0" max="20" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="cut-field"><span>Наклон диска</span><div><input v-scrub-number v-model.number="selectedOperation.bevel_angle" type="number" min="-45" max="45"><b>°</b></div></label>
+                                <label class="editor-field">Пропил, мм<input v-scrub-number v-model.number="selectedOperation.kerf" type="number" min="0" max="20" step="0.1"></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Глубина, мм<input v-model.number="selectedOperation.cut_depth" type="number" min="0.1" :max="partDraft.dimensions.thickness" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Глубина, мм<input v-scrub-number v-model.number="selectedOperation.cut_depth" type="number" min="0.1" :max="partDraft.dimensions.thickness" step="0.1"></label>
                                 <label class="editor-field">Направление<select v-model="selectedOperation.cut_direction"><option value="top_down">Сверху вниз</option><option value="bottom_up">Снизу вверх</option></select></label>
                             </div>
-                            <p class="operation-tip">Разные отступы в начале и конце образуют продольный рез под углом — например, коническую ножку.</p>
-                        </template>
+                            </template>
 
                         <template v-else-if="selectedOperation.type === 'groove'">
-                            <label class="editor-field mt-4">Рабочая поверхность
+                            <label class="editor-field mt-2">Рабочая поверхность
                                 <select :value="selectedOperation.face" @change="setGrooveFace($event.target.value)">
                                     <option value="top">Верхняя пласть</option>
                                     <option value="bottom">Нижняя пласть</option>
@@ -373,27 +382,25 @@
                                     <option value="end">Конечный торец</option>
                                 </select>
                             </label>
-                            <p class="operation-tip">Кликните по другой грани прямо на заготовке, чтобы перенести паз на неё. Выбрано: {{ grooveFaceLabel }}.</p>
-                            <div class="mt-3 grid grid-cols-3 gap-2">
+                            <div class="mt-2 grid grid-cols-3 gap-2">
                                 <button class="button-secondary" type="button" @click="setGrooveDirection(0)">Вдоль</button>
                                 <button class="button-secondary" type="button" @click="setGrooveDirection(90)">Поперёк</button>
-                                <label class="cut-field"><span>Угол</span><div><input v-model.number="selectedOperation.path_angle" type="number" min="-180" max="180" step="1"><b>°</b></div></label>
+                                <label class="cut-field"><span>Угол</span><div><input v-scrub-number v-model.number="selectedOperation.path_angle" type="number" min="-180" max="180" step="1"><b>°</b></div></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Центр U, мм<input v-model.number="selectedOperation.center_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
-                                <label class="editor-field">Центр V, мм<input v-model.number="selectedOperation.center_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Центр U, мм<input v-scrub-number v-model.number="selectedOperation.center_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
+                                <label class="editor-field">Центр V, мм<input v-scrub-number v-model.number="selectedOperation.center_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Длина, мм<input v-model.number="selectedOperation.groove_length" type="number" min="0.1" :max="Math.max(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1"></label>
-                                <label class="editor-field">Ширина, мм<input v-model.number="selectedOperation.width" type="number" min="0.1" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Длина, мм<input v-scrub-number v-model.number="selectedOperation.groove_length" type="number" min="0.1" :max="Math.max(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1"></label>
+                                <label class="editor-field">Ширина, мм<input v-scrub-number v-model.number="selectedOperation.width" type="number" min="0.1" step="0.1"></label>
                             </div>
-                            <label class="editor-field mt-3">Глубина, мм<input v-model.number="selectedOperation.depth" type="number" min="0.1" :max="grooveSurfaceSize.depth" step="0.1"></label>
-                            <label class="editor-field mt-3">Диаметр диска, мм<input v-model.number="selectedOperation.blade_diameter" type="number" min="1"></label>
-                            <p class="operation-tip">Перетаскивайте паз по поверхности за красный объём. Потяните круглую ручку на конце, чтобы изменить его длину и угол.</p>
-                        </template>
+                            <label class="editor-field mt-2">Глубина, мм<input v-scrub-number v-model.number="selectedOperation.depth" type="number" min="0.1" :max="grooveSurfaceSize.depth" step="0.1"></label>
+                            <label class="editor-field mt-2">Диаметр диска, мм<input v-scrub-number v-model.number="selectedOperation.blade_diameter" type="number" min="1"></label>
+                            </template>
 
                         <template v-else-if="selectedOperation.type === 'edge_roundover'">
-                            <label class="editor-field mt-4">Кромка
+                            <label class="editor-field mt-2">Кромка
                                 <select :value="selectedOperation.edge" @change="setRoundoverEdge($event.target.value)">
                                     <optgroup label="Продольные кромки">
                                         <option value="top_left">Верхняя левая</option>
@@ -415,16 +422,14 @@
                                     </optgroup>
                                 </select>
                             </label>
-                            <p class="operation-tip">Кликните рядом с нужной кромкой непосредственно на заготовке. Выбрано: {{ roundoverEdgeLabel }}.</p>
-                            <label class="editor-field mt-3">Радиус скругления, мм
+                            <label class="editor-field mt-2">Радиус скругления, мм
                                 <input :value="selectedOperation.radius" type="range" min="0.1" :max="roundoverMaximumRadius" step="0.1" @input="setRoundoverRadius($event.target.value)">
                             </label>
-                            <label class="cut-field mt-3"><span>Точный радиус</span><div><input :value="selectedOperation.radius" type="number" min="0.1" :max="roundoverMaximumRadius" step="0.1" @change="setRoundoverRadius($event.target.value)"><b>мм</b></div></label>
-                            <p class="operation-tip">Скругление применяется по всей длине выбранной кромки. Удаляемый фрезой материал показан полупрозрачным.</p>
-                        </template>
+                            <label class="cut-field mt-2"><span>Точный радиус</span><div><input v-scrub-number :value="selectedOperation.radius" type="number" min="0.1" :max="roundoverMaximumRadius" step="0.1" @scrub-value="setRoundoverRadius($event.target.value)" @change="setRoundoverRadius($event.target.value)"><b>мм</b></div></label>
+                            </template>
 
                         <template v-else-if="selectedOperation.type === 'plunge_route'">
-                            <label class="editor-field mt-4">Рабочая поверхность
+                            <label class="editor-field mt-2">Рабочая поверхность
                                 <select :value="selectedOperation.face" @change="setPlungeFace($event.target.value)">
                                     <option value="top">Верхняя пласть</option>
                                     <option value="bottom">Нижняя пласть</option>
@@ -434,12 +439,11 @@
                                     <option value="end">Конечный торец</option>
                                 </select>
                             </label>
-                            <p class="operation-tip">Кликните по нужной грани заготовки, чтобы перенести фрезу на неё. Выбрано: {{ grooveFaceLabel }}.</p>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
+                            <div class="mt-2 grid grid-cols-2 gap-2">
                                 <button class="button-secondary" :class="{ active: selectedOperation.route_mode === 'point' }" type="button" @click="setPlungeMode('point')">Погружение</button>
                                 <button class="button-secondary" :class="{ active: selectedOperation.route_mode === 'path' }" type="button" @click="setPlungeMode('path')">Проход</button>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
+                            <div class="mt-2 grid grid-cols-2 gap-2">
                                 <label class="editor-field">Профиль фрезы
                                     <select :value="selectedOperation.cutter_profile" @change="setPlungeProfile($event.target.value)">
                                         <option value="straight">Прямая</option>
@@ -449,26 +453,25 @@
                                 </label>
                                 <label v-if="selectedOperation.cutter_profile !== 'straight'" class="cut-field">
                                     <span>{{ selectedOperation.cutter_profile === 'dovetail' ? 'Угол боковой стенки' : 'Угол раскрытия' }}</span>
-                                    <div><input :value="selectedOperation.cutter_angle" type="number" :min="selectedOperation.cutter_profile === 'dovetail' ? 1 : 10" :max="selectedOperation.cutter_profile === 'dovetail' ? 45 : 170" step="1" @change="setPlungeAngle($event.target.value)"><b>°</b></div>
+                                    <div><input v-scrub-number :value="selectedOperation.cutter_angle" type="number" :min="selectedOperation.cutter_profile === 'dovetail' ? 1 : 10" :max="selectedOperation.cutter_profile === 'dovetail' ? 45 : 170" step="1" @change="setPlungeAngle($event.target.value)"><b>°</b></div>
                                 </label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Начало U, мм<input v-model.number="selectedOperation.start_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
-                                <label class="editor-field">Начало V, мм<input v-model.number="selectedOperation.start_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Начало U, мм<input v-scrub-number v-model.number="selectedOperation.start_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
+                                <label class="editor-field">Начало V, мм<input v-scrub-number v-model.number="selectedOperation.start_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">{{ selectedOperation.cutter_profile === 'straight' ? 'Диаметр фрезы, мм' : 'Макс. диаметр, мм' }}<input :value="selectedOperation.cutter_diameter" type="number" min="0.1" :max="Math.min(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1" @change="setPlungeDiameter($event.target.value)"></label>
-                                <label class="editor-field">Глубина, мм<input :value="selectedOperation.depth" type="number" min="0.1" :max="plungeMaximumDepth" step="0.1" @change="setPlungeDepth($event.target.value)"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">{{ selectedOperation.cutter_profile === 'straight' ? 'Диаметр фрезы, мм' : 'Макс. диаметр, мм' }}<input v-scrub-number :value="selectedOperation.cutter_diameter" type="number" min="0.1" :max="Math.min(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1" @change="setPlungeDiameter($event.target.value)"></label>
+                                <label class="editor-field">Глубина, мм<input v-scrub-number :value="selectedOperation.depth" type="number" min="0.1" :max="plungeMaximumDepth" step="0.1" @scrub-value="setPlungeDepth($event.target.value)" @change="setPlungeDepth($event.target.value)"></label>
                             </div>
-                            <div v-if="selectedOperation.route_mode === 'path'" class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="cut-field"><span>Угол прохода</span><div><input v-model.number="selectedOperation.path_angle" type="number" min="-180" max="180" step="1"><b>°</b></div></label>
-                                <label class="editor-field">Расстояние прохода, мм<input v-model.number="selectedOperation.travel_length" type="number" min="0.1" :max="Math.hypot(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1"></label>
+                            <div v-if="selectedOperation.route_mode === 'path'" class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="cut-field"><span>Угол прохода</span><div><input v-scrub-number v-model.number="selectedOperation.path_angle" type="number" min="-180" max="180" step="1"><b>°</b></div></label>
+                                <label class="editor-field">Расстояние прохода, мм<input v-scrub-number v-model.number="selectedOperation.travel_length" type="number" min="0.1" :max="Math.hypot(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1"></label>
                             </div>
-                            <p class="operation-tip">Профиль «{{ plungeProfileLabel }}» формирует реальное сечение выреза. Жёлтая ручка задаёт точку погружения, а красная ручка прохода одновременно меняет его направление и расстояние.</p>
-                        </template>
+                            </template>
 
                         <template v-else-if="selectedOperation.type === 'drill'">
-                            <label class="editor-field mt-4">Рабочая поверхность
+                            <label class="editor-field mt-2">Рабочая поверхность
                                 <select :value="selectedOperation.face" @change="setDrillFace($event.target.value)">
                                     <option value="top">Верхняя пласть</option>
                                     <option value="bottom">Нижняя пласть</option>
@@ -478,55 +481,59 @@
                                     <option value="end">Конечный торец</option>
                                 </select>
                             </label>
-                            <p class="operation-tip">Кликните по грани заготовки, затем перетащите красный цилиндр в точку сверления. Выбрано: {{ grooveFaceLabel }}.</p>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Центр U, мм<input v-model.number="selectedOperation.center_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
-                                <label class="editor-field">Центр V, мм<input v-model.number="selectedOperation.center_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Центр U, мм<input v-scrub-number v-model.number="selectedOperation.center_u" type="number" min="0" :max="grooveSurfaceSize.u" step="0.1"></label>
+                                <label class="editor-field">Центр V, мм<input v-scrub-number v-model.number="selectedOperation.center_v" type="number" min="0" :max="grooveSurfaceSize.v" step="0.1"></label>
                             </div>
-                            <div class="mt-3 grid grid-cols-2 gap-2">
-                                <label class="editor-field">Диаметр, мм<input :value="selectedOperation.diameter" type="number" min="0.1" :max="Math.min(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1" @change="setDrillDiameter($event.target.value)"></label>
-                                <label class="editor-field">Глубина, мм<input :value="selectedOperation.through ? grooveSurfaceSize.depth : selectedOperation.depth" type="number" min="0.1" :max="grooveSurfaceSize.depth" step="0.1" :disabled="selectedOperation.through" @change="setDrillDepth($event.target.value)"></label>
+                            <div class="mt-2 grid grid-cols-2 gap-2">
+                                <label class="editor-field">Диаметр, мм<input v-scrub-number :value="selectedOperation.diameter" type="number" min="0.1" :max="Math.min(grooveSurfaceSize.u, grooveSurfaceSize.v)" step="0.1" @change="setDrillDiameter($event.target.value)"></label>
+                                <label class="editor-field">Глубина, мм<input v-scrub-number :value="selectedOperation.through ? grooveSurfaceSize.depth : selectedOperation.depth" type="number" min="0.1" :max="grooveSurfaceSize.depth" step="0.1" :disabled="selectedOperation.through" @scrub-value="setDrillDepth($event.target.value)" @change="setDrillDepth($event.target.value)"></label>
                             </div>
-                            <label class="mt-3 flex items-center gap-2 text-sm font-semibold text-stone-600">
+                            <label class="mt-2 flex items-center gap-2 text-sm font-semibold text-stone-600">
                                 <input :checked="selectedOperation.through" type="checkbox" @change="setDrillThrough($event.target.checked)">
                                 Сквозное отверстие
                             </label>
                         </template>
+                        <details v-if="operationHelp[selectedOperation.type]" :key="selectedOperation.type" class="inspector-operation-help">
+                            <summary>Подсказка по инструменту</summary>
+                            <p>{{ operationHelp[selectedOperation.type] }}</p>
+                        </details>
                     </div>
 
                     <div class="inspector-section grid gap-2">
-                        <button class="button-primary w-full" type="button" :disabled="saveState === 'saving' || currentOperations.length === 0" @click="savePart">
+                        <button class="button-primary button-compact w-full" type="button" :disabled="saveState === 'saving' || currentOperations.length === 0" @click="savePart">
                             {{ saveState === 'saving' ? 'Применяем…' : `Применить операции ×${currentOperations.length}` }}
                         </button>
-                        <p class="apply-operations-note">После применения плоскости скроются. Связанных экземпляров на сцене: {{ activePart?.instance_count ?? 0 }}.</p>
-                        <button class="danger-button" type="button" @click="removePart">Удалить заготовку</button>
+                        <button class="danger-button inspector-text-action" type="button" @click="removePart">Удалить заготовку</button>
                     </div>
                 </template>
 
                 <template v-else-if="selectedGroup">
-                    <div class="inspector-section">
+                    <div class="inspector-section inspector-context">
                         <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Сборочный узел</h2>
+                            <span class="inspector-kicker">Сборочный узел</span>
                             <span class="status-pill">{{ selectedGroupDescendantCount }} деталей</span>
                         </div>
-                        <label class="editor-field mt-4">Название<input v-model="selectedGroup.name" maxlength="255" @change="saveSelectedGroup"></label>
-                        <label class="editor-field mt-3">Родительский узел
+                        <h2 class="inspector-name truncate" :title="selectedGroup.name">{{ selectedGroup.name }}</h2>
+                        <div class="inspector-actions" role="group" aria-label="Действия с узлом">
+                            <InspectorAction v-if="selectedGroup.id !== activeAssemblyGroupId" icon="enter" label="Открыть узел" caption="Открыть" @click="openAssemblyGroup(selectedGroup.id)" />
+                            <InspectorAction :icon="selectedGroup.is_visible ? 'eye' : 'eyeOff'" label="Показывать узел" :hint="selectedGroup.is_visible ? 'Скрыть узел' : 'Показать узел'" :pressed="selectedGroup.is_visible" @click="toggleGroupVisibility(selectedGroup)" />
+                            <InspectorAction icon="lock" label="Заблокировать детали узла" :hint="selectedGroup.is_locked ? 'Разблокировать детали' : 'Заблокировать детали'" :pressed="selectedGroup.is_locked" @click="selectedGroup.is_locked = !selectedGroup.is_locked; saveSelectedGroup()" />
+                            <InspectorAction icon="ghost" label="Полупрозрачный узел" :pressed="isGroupGhosted(selectedGroup.id)" @click="toggleGroupGhost(selectedGroup.id)" />
+                            <InspectorAction icon="isolate" label="Изолировать узел" :hint="isolatedGroupId === selectedGroup.id ? 'Показать окружение' : 'Изолировать узел'" :pressed="isolatedGroupId === selectedGroup.id" @click="toggleGroupIsolation(selectedGroup.id)" />
+                        </div>
+                    </div>
+                    <div class="inspector-section grid gap-2">
+                        <label class="editor-field inspector-inline-field">Название<input v-model="selectedGroup.name" maxlength="255" @change="saveSelectedGroup"></label>
+                        <label class="editor-field inspector-inline-field">Родитель
                             <select :value="selectedGroup.parent_id ?? ''" @change="moveSelectedGroup($event.target.value)">
                                 <option value="">Всё изделие</option>
                                 <option v-for="group in availableGroupParents" :key="group.id" :value="group.id">{{ group.name }}</option>
                             </select>
                         </label>
                     </div>
-                    <div class="inspector-section grid gap-3">
-                        <label class="mirror-toggle"><input v-model="selectedGroup.is_visible" type="checkbox" @change="saveSelectedGroup"><span>Показывать узел на сцене</span></label>
-                        <label class="mirror-toggle"><input v-model="selectedGroup.is_locked" type="checkbox" @change="saveSelectedGroup"><span>Заблокировать детали узла</span></label>
-                        <button class="button-secondary w-full" :class="{ 'border-sky-200 bg-sky-50 text-sky-700': isGroupGhosted(selectedGroup.id) }" type="button" @click="toggleGroupGhost(selectedGroup.id)">{{ isGroupGhosted(selectedGroup.id) ? 'Вернуть обычный вид' : 'Сделать узел полупрозрачным' }}</button>
-                        <button class="button-secondary w-full" type="button" @click="toggleGroupIsolation(selectedGroup.id)">{{ isolatedGroupId === selectedGroup.id ? 'Показать окружение' : 'Изолировать узел' }}</button>
-                        <button class="button-primary w-full" type="button" @click="openAssemblyGroup(selectedGroup.id)">Открыть как отдельное изделие</button>
-                    </div>
                     <div class="inspector-section">
-                        <p class="mb-3 text-xs leading-5 text-stone-400">Удаление без содержимого перенесёт дочерние узлы и детали на уровень выше.</p>
-                        <button class="danger-button w-full" type="button" @click="removeSelectedGroup">Удалить узел</button>
+                        <button class="danger-button inspector-text-action" type="button" @click="removeSelectedGroup">Удалить узел</button>
                     </div>
                 </template>
 
@@ -552,14 +559,14 @@
                             <div class="flex items-center justify-between gap-3"><strong class="text-xs text-emerald-900">Положение на гранях</strong><span class="text-[10px] text-emerald-700">Перетаскивайте ◆ на сцене</span></div>
                             <div v-for="role in ['primary', 'secondary']" :key="role" class="grid grid-cols-2 gap-2">
                                 <div class="col-span-2 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wide text-stone-400"><span>{{ role === 'primary' ? 'Первая деталь' : 'Вторая деталь' }}</span><button class="text-emerald-700 hover:text-emerald-900" type="button" @click="centerConnectionOnFace(role)">По центру</button></div>
-                                <label class="dimension-field"><span>U, мм</span><input :value="connectionCenterValue(role, 'u')" type="number" min="0" :max="connectionSurfaceSize(role).u" step="0.1" @change="setConnectionCenter(role, 'u', $event.target.value)"></label>
-                                <label class="dimension-field"><span>V, мм</span><input :value="connectionCenterValue(role, 'v')" type="number" min="0" :max="connectionSurfaceSize(role).v" step="0.1" @change="setConnectionCenter(role, 'v', $event.target.value)"></label>
+                                <label class="dimension-field"><span>U, мм</span><input v-scrub-number :value="connectionCenterValue(role, 'u')" type="number" min="0" :max="connectionSurfaceSize(role).u" step="0.1" @change="setConnectionCenter(role, 'u', $event.target.value)"></label>
+                                <label class="dimension-field"><span>V, мм</span><input v-scrub-number :value="connectionCenterValue(role, 'v')" type="number" min="0" :max="connectionSurfaceSize(role).v" step="0.1" @change="setConnectionCenter(role, 'v', $event.target.value)"></label>
                             </div>
                             <label v-if="selectedConnection.type !== 'mortise_tenon'" class="editor-field">Угол на поверхности, °
-                                <div class="mt-1 flex items-center gap-2"><input class="min-w-0 flex-1 accent-emerald-700" :value="selectedConnection.parameters.joint_angle ?? 0" type="range" min="-180" max="180" step="1" @input="setConnectionParameter('joint_angle', $event.target.value, false)" @change="saveSelectedConnectionParameters"><input class="w-20" :value="selectedConnection.parameters.joint_angle ?? 0" type="number" min="-180" max="180" step="1" @change="setConnectionParameter('joint_angle', $event.target.value)"></div>
+                                <div class="mt-1 flex items-center gap-2"><input class="min-w-0 flex-1 accent-emerald-700" :value="selectedConnection.parameters.joint_angle ?? 0" type="range" min="-180" max="180" step="1" @input="setConnectionParameter('joint_angle', $event.target.value, false)" @change="saveSelectedConnectionParameters"><input v-scrub-number class="w-20" :value="selectedConnection.parameters.joint_angle ?? 0" type="number" min="-180" max="180" step="1" @change="setConnectionParameter('joint_angle', $event.target.value)"></div>
                             </label>
-                            <div v-if="selectedConnection.type === 'half_lap'" class="grid grid-cols-2 gap-2"><label class="dimension-field"><span>Длина зоны</span><input :value="selectedConnection.parameters.joint_length ?? defaultConnectionArea.length" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_length', $event.target.value)"></label><label class="dimension-field"><span>Ширина зоны</span><input :value="selectedConnection.parameters.joint_width ?? defaultConnectionArea.width" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_width', $event.target.value)"></label></div>
-                            <label v-if="selectedConnection.type === 'dowel'" class="editor-field">Шаг между шкантами, мм<input :value="selectedConnection.parameters.dowel_spacing ?? Number(selectedConnection.parameters.dowel_diameter ?? 8) * 2" type="number" min="0.1" step="0.1" @change="setConnectionParameter('dowel_spacing', $event.target.value)"></label>
+                            <div v-if="selectedConnection.type === 'half_lap'" class="grid grid-cols-2 gap-2"><label class="dimension-field"><span>Длина зоны</span><input v-scrub-number :value="selectedConnection.parameters.joint_length ?? defaultConnectionArea.length" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_length', $event.target.value)"></label><label class="dimension-field"><span>Ширина зоны</span><input v-scrub-number :value="selectedConnection.parameters.joint_width ?? defaultConnectionArea.width" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_width', $event.target.value)"></label></div>
+                            <label v-if="selectedConnection.type === 'dowel'" class="editor-field">Шаг между шкантами, мм<input v-scrub-number :value="selectedConnection.parameters.dowel_spacing ?? Number(selectedConnection.parameters.dowel_diameter ?? 8) * 2" type="number" min="0.1" step="0.1" @change="setConnectionParameter('dowel_spacing', $event.target.value)"></label>
                         </div>
                         <div class="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
                             <div class="flex items-center justify-between gap-3">
@@ -576,98 +583,74 @@
                     </div>
                 </template>
 
-                <template v-else-if="selectedInstance">
-                    <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Экземпляр</h2>
-                            <span class="status-pill">{{ selectedPart?.name }}</span>
+                <template v-else-if="selectedInstance && selectedPart">
+                    <div class="inspector-section inspector-context">
+                        <div class="min-w-0">
+                            <span class="inspector-kicker">Деталь · #{{ selectedInstance.id }}</span>
+                            <h2 class="inspector-name truncate" :title="selectedPart.name">{{ selectedPart.name }}</h2>
                         </div>
-                        <p class="mt-3 text-xs text-stone-400">Изменяется только размещение этой детали.</p>
-                        <label class="editor-field mt-4">Сборочный узел
+                        <div class="inspector-actions" role="group" aria-label="Действия с деталью">
+                            <InspectorAction icon="edit" label="Редактировать заготовку" caption="Заготовка" @click="openPart(selectedPart, selectedInstanceId)" />
+                            <InspectorAction icon="ghost" label="Полупрозрачная деталь"
+                                :hint="isInstanceGhostedByGroup(selectedInstance) ? 'Прозрачность задана узлом' : 'Переключить прозрачность детали'"
+                                :pressed="isInstanceGhosted(selectedInstance.id)" :disabled="isInstanceGhostedByGroup(selectedInstance)"
+                                @click="toggleInstanceGhost(selectedInstance.id)" />
+                            <InspectorAction icon="copy" label="Дублировать деталь" hint="Дублировать · Shift+D" :disabled="instanceToolsBusy" @click="duplicateSelectedInstance" />
+                            <InspectorAction icon="mirror" label="Создать зеркальную копию" :disabled="instanceToolsBusy" @click="mirrorSelectedInstance" />
+                        </div>
+                    </div>
+
+                    <div class="inspector-section">
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="inspector-heading">Размеры, мм</h3>
+                            <span v-if="selectedPart.material" class="min-w-0 truncate text-xs text-stone-600" :title="selectedPart.material">{{ selectedPart.material }}</span>
+                        </div>
+                        <dl class="inspector-values">
+                            <div v-for="field in stockDimensionFields" :key="field.key" class="inspector-readout">
+                                <dt>{{ field.label }}</dt><dd>{{ selectedPart.dimensions[field.key] }}</dd>
+                            </div>
+                        </dl>
+                        <label class="editor-field inspector-inline-field mt-2">Узел
                             <select :value="selectedInstance.assembly_group_id ?? ''" @change="assignSelectedInstance($event.target.value)">
-                                <option value="">Без группы</option>
+                                <option value="">Без узла</option>
                                 <option v-for="group in projects.assemblyGroups" :key="group.id" :value="group.id">{{ group.name }}</option>
                             </select>
                         </label>
-                        <button class="button-primary mt-4 w-full" type="button" @click="openPart(selectedPart)">Редактировать заготовку</button>
                     </div>
 
                     <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Размеры заготовки</h2>
-                            <span class="text-[10px] font-semibold text-stone-400">мм</span>
+                        <div class="flex items-center justify-between gap-2">
+                            <h3 class="inspector-heading">Положение</h3>
+                            <span class="inspector-shortcuts" title="G — переместить, R — повернуть, S — масштабировать"><kbd>G</kbd><kbd>R</kbd><kbd>S</kbd></span>
                         </div>
-                        <dl class="mt-4 grid grid-cols-3 gap-2">
-                            <div class="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5">
-                                <dt class="text-[10px] font-semibold uppercase tracking-wide text-stone-400">Длина</dt>
-                                <dd class="mt-1 text-sm font-semibold text-stone-700">{{ selectedPart.dimensions.length }}</dd>
-                            </div>
-                            <div class="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5">
-                                <dt class="text-[10px] font-semibold uppercase tracking-wide text-stone-400">Ширина</dt>
-                                <dd class="mt-1 text-sm font-semibold text-stone-700">{{ selectedPart.dimensions.width }}</dd>
-                            </div>
-                            <div class="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5">
-                                <dt class="text-[10px] font-semibold uppercase tracking-wide text-stone-400">Толщина</dt>
-                                <dd class="mt-1 text-sm font-semibold text-stone-700">{{ selectedPart.dimensions.thickness }}</dd>
-                            </div>
-                        </dl>
-                        <p v-if="selectedPart.material" class="mt-3 text-xs leading-5 text-stone-400">Материал: <span class="font-medium text-stone-600">{{ selectedPart.material }}</span></p>
-                        <button
-                            class="button-secondary mt-4 w-full disabled:cursor-not-allowed disabled:opacity-50"
-                            :class="{ 'border-sky-200 bg-sky-50 text-sky-700': isInstanceGhosted(selectedInstance.id) }"
-                            type="button"
-                            :disabled="isInstanceGhostedByGroup(selectedInstance)"
-                            :title="isInstanceGhostedByGroup(selectedInstance) ? 'Прозрачность задана родительским узлом' : null"
-                            @click="toggleInstanceGhost(selectedInstance.id)"
-                        >{{ isInstanceGhosted(selectedInstance.id) ? 'Вернуть обычный вид' : 'Сделать деталь полупрозрачной' }}</button>
+                        <div v-for="field in transformFields" :key="field.key" class="inspector-transform-row">
+                            <span>{{ field.label }}</span>
+                            <label v-for="axis in axes" :key="axis" class="inspector-axis" :data-axis="axis">
+                                <span aria-hidden="true">{{ axis.toUpperCase() }}</span>
+                                <input v-scrub-number v-model.number="selectedInstance[field.key][axis]" :aria-label="`${field.label}, ${axis.toUpperCase()}`" type="number" :disabled="instanceInspectorSaving" @scrub-start="beginInstanceInspectorEdit" @focus="beginInstanceInspectorEdit" @change="saveInstance">
+                            </label>
+                        </div>
+                        <label class="mirror-toggle mt-2"><input v-model="selectedInstance.mirrored" type="checkbox" :disabled="instanceInspectorSaving" @focus="beginInstanceInspectorEdit" @pointerdown="beginInstanceInspectorEdit" @change="saveInstance"><span>Зеркальный экземпляр</span></label>
                     </div>
+                    <AssemblyPlacementPanel :key="selectedInstance.id" :source="{ part: selectedPart, instance: selectedInstance }" :parts="projects.parts" :disabled="explodeDistance > 0 || assemblyInstanceState.lockedInstanceIds.includes(selectedInstance.id)" :commit="commitInstanceTransform" />
 
-                    <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Позиция, мм</h2>
-                            <span class="text-[10px] font-semibold text-emerald-700">Грани · центры</span>
-                        </div>
-                        <div class="mt-4 grid grid-cols-3 gap-2">
-                            <label v-for="axis in axes" :key="`position-${axis}`" class="dimension-field"><span>{{ axis.toUpperCase() }}</span><input v-model.number="selectedInstance.position[axis]" type="number" @focus="beginInstanceInspectorEdit" @change="saveInstance"></label>
-                        </div>
-                        <p class="mt-2 text-[11px] leading-4 text-stone-400">G → X/Y/Z автоматически привязывает грань или центр к ближайшей детали. Ctrl временно отключает привязку.</p>
-                    </div>
+                    <details class="inspector-section inspector-disclosure">
+                        <summary>Линейный массив</summary>
 
-                    <div class="inspector-section">
-                        <h2 class="inspector-heading">Поворот, °</h2>
-                        <div class="mt-4 grid grid-cols-3 gap-2">
-                            <label v-for="axis in axes" :key="`rotation-${axis}`" class="dimension-field"><span>{{ axis.toUpperCase() }}</span><input v-model.number="selectedInstance.rotation[axis]" type="number" @focus="beginInstanceInspectorEdit" @change="saveInstance"></label>
-                        </div>
-                        <label class="mirror-toggle mt-4"><input v-model="selectedInstance.mirrored" type="checkbox" @pointerdown="beginInstanceInspectorEdit" @change="saveInstance"><span>Зеркальный экземпляр</span></label>
-                        <AssemblyPlacementPanel :key="selectedInstance.id" :source="{ part: selectedPart, instance: selectedInstance }" :parts="projects.parts" :disabled="explodeDistance > 0 || assemblyInstanceState.lockedInstanceIds.includes(selectedInstance.id)" :commit="commitInstanceTransform" />
-                    </div>
-
-                    <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3">
-                            <h2 class="inspector-heading">Копии</h2>
-                            <span class="text-[10px] font-semibold text-stone-400">Shift+D</span>
-                        </div>
-                        <div class="mt-4 grid grid-cols-2 gap-2">
-                            <button class="button-secondary" type="button" :disabled="instanceToolsBusy" @click="duplicateSelectedInstance">Дублировать</button>
-                            <button class="button-secondary" type="button" :disabled="instanceToolsBusy" @click="mirrorSelectedInstance">Зеркальная копия</button>
-                        </div>
-                        <p class="mt-2 text-[11px] leading-4 text-stone-400">Копия создаётся в том же положении и сразу выделяется. Зеркалирование выполняется по локальной оси длины детали.</p>
-
-                        <div class="mt-5 rounded-xl border border-stone-200 bg-stone-50 p-3">
-                            <strong class="text-xs text-stone-700">Линейный массив</strong>
-                            <div class="mt-3 grid grid-cols-3 gap-2">
+                        <div class="inspector-disclosure-body">
+                            <div class="grid grid-cols-3 gap-2">
                                 <label class="dimension-field"><span>Ось</span><select v-model="arraySettings.axis" class="min-w-0 rounded-lg border border-stone-200 bg-stone-100 px-2 py-2 text-xs text-stone-600"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
-                                <label class="dimension-field"><span>Копий</span><input v-model.number="arraySettings.copies" type="number" min="1" max="20"></label>
-                                <label class="dimension-field"><span>Шаг, мм</span><input v-model.number="arraySettings.spacing" type="number" min="-100000" max="100000" step="0.1"></label>
+                                <label class="dimension-field"><span>Копий</span><input v-scrub-number v-model.number="arraySettings.copies" type="number" min="1" max="20"></label>
+                                <label class="dimension-field"><span>Шаг, мм</span><input v-scrub-number v-model.number="arraySettings.spacing" type="number" min="-100000" max="100000" step="0.1"></label>
                             </div>
-                            <button class="button-primary mt-3 w-full" type="button" :disabled="instanceToolsBusy" @click="createLinearArray">
+                            <button class="button-primary button-compact mt-2 w-full" type="button" :disabled="instanceToolsBusy" @click="createLinearArray">
                                 {{ instanceToolsBusy ? 'Создаём…' : `Создать копии ×${arraySettings.copies}` }}
                             </button>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="inspector-section">
-                        <div class="flex items-center justify-between gap-3"><h2 class="inspector-heading">Соединения</h2><span class="operation-badge">{{ selectedInstanceConnections.length }}</span></div>
+                    <details class="inspector-section inspector-disclosure">
+                        <summary>Соединения <span class="operation-badge">{{ selectedInstanceConnections.length }}</span></summary>
                         <div v-if="selectedInstanceConnections.length" class="mt-3 grid gap-2">
                             <button v-for="connection in selectedInstanceConnections" :key="connection.id" class="rounded-xl border border-stone-200 bg-stone-50 p-3 text-left hover:border-emerald-400" type="button" @click="selectConnection(connection.id)"><strong class="block text-xs text-stone-700">{{ connection.label || connectionTypeLabel(connection.type) }}</strong><small class="mt-1 block text-[10px] text-stone-400">с {{ instanceName(otherConnectionInstanceId(connection, selectedInstance.id)) }}</small></button>
                         </div>
@@ -676,17 +659,17 @@
                             <label class="editor-field">Вторая деталь<select v-model.number="connectionDraft.secondary_instance_id" required><option :value="null" disabled>Выберите деталь</option><option v-for="option in connectionTargetOptions" :key="option.id" :value="option.id">{{ option.name }} #{{ option.id }}</option></select></label>
                             <label class="editor-field">Тип<select v-model="connectionDraft.type"><option v-for="(label, type) in connectionTypeLabels" :key="type" :value="type">{{ label }}</option></select></label>
                             <div class="grid grid-cols-2 gap-2"><label class="editor-field">Грань первой<select v-model="connectionDraft.primary_face"><option v-for="(label, face) in connectionFaceLabels" :key="face" :value="face">{{ label }}</option></select></label><label class="editor-field">Грань второй<select v-model="connectionDraft.secondary_face"><option v-for="(label, face) in connectionFaceLabels" :key="face" :value="face">{{ label }}</option></select></label></div>
-                            <div v-if="connectionDraft.type === 'half_lap'" class="grid grid-cols-1 gap-2"><label class="editor-field">Доля глубины<input v-model.number="connectionDraft.depth_ratio" type="number" min="0.1" max="0.9" step="0.05"></label></div>
-                            <div v-else-if="connectionDraft.type === 'mortise_tenon'" class="grid grid-cols-3 gap-2"><label class="dimension-field"><span>Ширина</span><input v-model.number="connectionDraft.tenon_width" type="number" min="0.1"></label><label class="dimension-field"><span>Толщина</span><input v-model.number="connectionDraft.tenon_thickness" type="number" min="0.1"></label><label class="dimension-field"><span>Длина</span><input v-model.number="connectionDraft.tenon_length" type="number" min="0.1"></label></div>
-                            <div v-else-if="connectionDraft.type === 'dowel'" class="grid grid-cols-3 gap-2"><label class="dimension-field"><span>Ø, мм</span><input v-model.number="connectionDraft.dowel_diameter" type="number" min="0.1"></label><label class="dimension-field"><span>Кол-во</span><input v-model.number="connectionDraft.dowel_count" type="number" min="1"></label><label class="dimension-field"><span>Глубина</span><input v-model.number="connectionDraft.dowel_depth" type="number" min="0.1"></label></div>
+                            <div v-if="connectionDraft.type === 'half_lap'" class="grid grid-cols-1 gap-2"><label class="editor-field">Доля глубины<input v-scrub-number v-model.number="connectionDraft.depth_ratio" type="number" min="0.1" max="0.9" step="0.05"></label></div>
+                            <div v-else-if="connectionDraft.type === 'mortise_tenon'" class="grid grid-cols-3 gap-2"><label class="dimension-field"><span>Ширина</span><input v-scrub-number v-model.number="connectionDraft.tenon_width" type="number" min="0.1"></label><label class="dimension-field"><span>Толщина</span><input v-scrub-number v-model.number="connectionDraft.tenon_thickness" type="number" min="0.1"></label><label class="dimension-field"><span>Длина</span><input v-scrub-number v-model.number="connectionDraft.tenon_length" type="number" min="0.1"></label></div>
+                            <div v-else-if="connectionDraft.type === 'dowel'" class="grid grid-cols-3 gap-2"><label class="dimension-field"><span>Ø, мм</span><input v-scrub-number v-model.number="connectionDraft.dowel_diameter" type="number" min="0.1"></label><label class="dimension-field"><span>Кол-во</span><input v-scrub-number v-model.number="connectionDraft.dowel_count" type="number" min="1"></label><label class="dimension-field"><span>Глубина</span><input v-scrub-number v-model.number="connectionDraft.dowel_depth" type="number" min="0.1"></label></div>
                             <label class="editor-field">Название<input v-model="connectionDraft.label" placeholder="Необязательно"></label>
                             <p v-if="connectionError" class="text-xs text-red-600">{{ connectionError }}</p>
                             <button class="button-primary button-compact w-full" type="submit" :disabled="connectionSaving">{{ connectionSaving ? 'Создаём…' : 'Связать детали' }}</button>
                         </form>
-                    </div>
+                    </details>
 
                     <div class="inspector-section">
-                        <button class="danger-button w-full" type="button" @click="removeInstance">Удалить со сцены</button>
+                        <button class="danger-button inspector-text-action" type="button" @click="removeInstance">Удалить со сцены</button>
                     </div>
                 </template>
 
@@ -697,13 +680,10 @@
                         <textarea v-model="projectDescription" class="editor-textarea" placeholder="Добавьте заметки к проекту" @change="saveProject"></textarea>
                     </div>
                     <div class="inspector-section">
-                        <h2 class="inspector-heading">Состав изделия</h2>
-                        <div v-for="part in projects.parts" :key="part.id" class="scene-item" :class="{ 'scene-item-active': selectedPartId === part.id }" @click="selectedPartId = part.id">
-                            <span class="scene-cube">◇</span><span class="truncate">{{ part.name }}</span><span class="ml-auto text-stone-400">×{{ part.instance_count }}</span>
-                        </div>
-                        <p v-if="!projects.parts.length" class="mt-4 text-xs leading-5 text-stone-400">Создайте заготовку в библиотеке слева.</p>
+                        <h2 class="inspector-heading">Выбор в сборке</h2>
+                        <p class="mt-2 text-xs leading-5 text-stone-500">{{ activeAssemblyGroup ? 'Выберите деталь в открытом узле. Двойной клик открывает вложенный узел.' : 'Выберите узел слева или двойным кликом на сцене. Деталь без узла можно выбрать сразу.' }}</p>
+                        <button v-if="!projects.parts.length" class="button-secondary mt-3 w-full" type="button" @click="showCreatePart = true">Создать заготовку</button>
                     </div>
-                    <div class="inspector-section"><p class="text-xs leading-5 text-stone-400">Щёлкните по детали на сцене, чтобы изменить её позицию и поворот.</p></div>
                 </template>
             </aside>
         </div>
@@ -719,10 +699,10 @@
                 <div class="mt-7 grid gap-4 sm:grid-cols-2">
                     <label class="field-label sm:col-span-2">Название<input v-model="newPart.name" class="field-input" placeholder="Например, ножка стола" required></label>
                     <label class="field-label sm:col-span-2">Материал<input v-model="newPart.material" class="field-input" placeholder="Дуб, ясень, фанера"></label>
-                    <label class="field-label">Длина, мм<input v-model.number="newPart.length" class="field-input" type="number" min="1" required></label>
-                    <label class="field-label">Ширина, мм<input v-model.number="newPart.width" class="field-input" type="number" min="1" required></label>
-                    <label class="field-label">Толщина, мм<input v-model.number="newPart.thickness" class="field-input" type="number" min="1" required></label>
-                    <label class="field-label">Количество на сцене<input v-model.number="newPart.quantity" class="field-input" type="number" min="0" max="20"></label>
+                    <label class="field-label">Длина, мм<input v-scrub-number v-model.number="newPart.length" class="field-input" type="number" min="1" required></label>
+                    <label class="field-label">Ширина, мм<input v-scrub-number v-model.number="newPart.width" class="field-input" type="number" min="1" required></label>
+                    <label class="field-label">Толщина, мм<input v-scrub-number v-model.number="newPart.thickness" class="field-input" type="number" min="1" required></label>
+                    <label class="field-label">Количество на сцене<input v-scrub-number v-model.number="newPart.quantity" class="field-input" type="number" min="0" max="20"></label>
                 </div>
                 <p v-if="createError" class="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{{ createError }}</p>
                 <div class="mt-7 flex justify-end gap-3"><button class="button-secondary" type="button" @click="showCreatePart = false">Отмена</button><button class="button-primary" type="submit" :disabled="creatingPart">{{ creatingPart ? 'Создаём…' : 'Создать заготовку' }}</button></div>
@@ -804,6 +784,16 @@
                     </div>
                 </div>
 
+                <ProjectMaterialsPanel
+                    :project-id="projectId"
+                    :parts="projects.parts"
+                    :costing="projectAnalysis?.manufacturing.costing"
+                    :settings="analysisEstimateSettings"
+                    :analysis-busy="projectAnalysisLoading"
+                    :focus-part-id="analysisPartId"
+                    @refresh="refreshProjectAnalysis"
+                />
+
                 <div v-if="projectAnalysisLoading" class="grid min-h-64 place-items-center">
                     <div class="text-center"><div class="loader mx-auto"></div><p class="mt-4 text-sm text-stone-500">Проверяем конструкцию…</p></div>
                 </div>
@@ -818,8 +808,8 @@
 
                     <section class="mt-5 rounded-xl border border-stone-200 bg-stone-50 p-4">
                         <div class="flex flex-wrap items-end gap-3">
-                            <label v-for="field in cuttingSettingFields" :key="field.key" class="grid min-w-32 flex-1 gap-1 text-[10px] font-semibold text-stone-500">{{ field.label }}
-                                <input v-model.number="cuttingSettings[field.key]" class="rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500" type="number" :min="field.min" :max="field.max" :step="field.step">
+                            <label v-for="field in visibleCuttingSettingFields" :key="field.key" class="grid min-w-32 flex-1 gap-1 text-[10px] font-semibold text-stone-500">{{ field.label }}
+                                <input v-scrub-number v-model.number="cuttingSettings[field.key]" class="rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs outline-none focus:border-emerald-500" type="number" :min="field.min" :max="field.max" :step="field.step">
                             </label>
                             <button class="button-primary button-compact" type="button" :disabled="projectAnalysisLoading" @click="refreshProjectAnalysis">Пересчитать</button>
                         </div>
@@ -887,7 +877,7 @@
                             <article v-for="(cutting, cuttingIndex) in projectAnalysis.manufacturing.sheet_cutting" :key="`sheet-${cuttingIndex}`" class="rounded-xl border border-stone-200 p-4">
                                 <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-stone-700">{{ cutting.material }} · {{ cutting.thickness }} мм</strong><span class="text-xs text-stone-400">{{ cutting.stock.length }} × {{ cutting.stock.width }} мм</span></div>
                                 <div v-for="sheet in cutting.sheets" :key="sheet.number" class="mt-3">
-                                    <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-stone-400"><span>Лист №{{ sheet.number }}</span><span>Остаток {{ formatAnalysisArea(sheet.waste_area) }} м²</span></div>
+                                    <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-stone-400"><span>Лист №{{ sheet.number }}</span><span>Пригодный остаток {{ formatAnalysisArea(sheet.reusable_area) }} м²</span></div>
                                     <div class="relative aspect-[2/1] overflow-hidden rounded-lg border-2 border-stone-300 bg-stone-50">
                                         <div v-for="placement in sheet.placements" :key="`${placement.part_id}-${placement.piece}`" class="absolute overflow-hidden border border-emerald-800 bg-emerald-200/80 p-1 text-[8px] font-semibold leading-tight text-emerald-900" :style="sheetPlacementStyle(placement, cutting.stock)" :title="`${placement.name}: ${placement.length} × ${placement.width} мм`">{{ placement.name }}</div>
                                     </div>
@@ -905,20 +895,26 @@
 </template>
 
 <script setup>
+import { vScrubNumber } from '../editor/scrubNumber.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ThreeViewport from '../components/ThreeViewport.vue';
 import ProjectScriptDialog from '../components/ProjectScriptDialog.vue';
 import ProjectVersionsDialog from '../components/ProjectVersionsDialog.vue';
+import ProjectMaterialsPanel from '../components/ProjectMaterialsPanel.vue';
 import AssemblyPlacementPanel from '../components/AssemblyPlacementPanel.vue';
+import InspectorAction from '../components/InspectorAction.vue';
 import { usePartDraftRecovery } from '../editor/usePartDraftRecovery.js';
 import { useAuthStore } from '../stores/auth';
 import { useProjectScripts } from '../editor/useProjectScripts.js';
+import { assemblyShortcutKey, groupMoveLimit, translatedPosition } from '../editor/assemblyMove.js';
+import { planAssemblyScale } from '../editor/assemblyScale.js';
 import {
     assemblyBreadcrumbs,
     assemblyInstanceState as calculateAssemblyInstanceState,
     descendantGroupIds,
-    flattenAssemblyTree,
+    assemblyLevelRows,
+    resolveAssemblyPick,
 } from '../editor/assemblyTree.js';
 import { duplicateBlueprint, instanceBlueprintPayload, linearArrayBlueprints, mirroredBlueprint } from '../editor/instanceCopies.js';
 import { createOperation, normalizeOperations, operationLabel, operationSummary } from '../editor/operations/catalog.js';
@@ -927,10 +923,9 @@ import {
     fitPlungeOperationToFace,
     plungeOperationRadius,
     plungeProfileMaximumDepth,
-    plungeProfileName,
 } from '../editor/operations/plungeRoute.js';
-import { maximumRoundoverRadius, roundoverEdgeLabels } from '../editor/operations/roundover.js';
-import { faceLabel, surfaceDimensions } from '../editor/operations/shared.js';
+import { maximumRoundoverRadius } from '../editor/operations/roundover.js';
+import { surfaceDimensions } from '../editor/operations/shared.js';
 import { useProjectApiTokens } from '../editor/useProjectApiTokens.js';
 import { useEditorHistory } from '../editor/useEditorHistory.js';
 import { useProjectsStore } from '../stores/projects';
@@ -940,16 +935,43 @@ const router = useRouter();
 const projects = useProjectsStore();
 const projectId = Number(route.params.id);
 const axes = ['x', 'y', 'z'];
+const stockDimensionFields = [
+    { key: 'length', label: 'Длина' },
+    { key: 'width', label: 'Ширина' },
+    { key: 'thickness', label: 'Толщина' },
+];
+const transformFields = [
+    { key: 'position', label: 'Позиция, мм' },
+    { key: 'rotation', label: 'Поворот, °' },
+];
+const operationTools = [
+    { type: 'cross_cut', icon: '╱', caption: 'Поперёк', label: 'Поперечный рез' },
+    { type: 'rip_cut', icon: '↗', caption: 'Вдоль', label: 'Продольный рез' },
+    { type: 'groove', icon: '⊔', caption: 'Паз пилой', label: 'Паз пилой' },
+    { type: 'edge_roundover', icon: '◜', caption: 'Кромка', label: 'Кромочный фрезер' },
+    { type: 'plunge_route', icon: '⌾', caption: 'Фрезер', label: 'Погружной фрезер' },
+    { type: 'drill', icon: '●', caption: 'Сверло', label: 'Сверление' },
+];
+const operationHelp = {
+    cross_cut: 'На полной глубине часть отделяется, на меньшей остаётся пропил шириной диска.',
+    rip_cut: 'Разные отступы на концах дают продольный рез под углом.',
+    groove: 'Выберите грань на сцене. Перетащите паз за красный объём или потяните за ручку, чтобы изменить длину и угол.',
+    edge_roundover: 'Кликните рядом с нужной кромкой на сцене. Фрезер пройдёт по всей её длине.',
+    plunge_route: 'Выберите грань. Жёлтая ручка задаёт точку погружения, красная — направление и длину прохода.',
+    drill: 'Выберите грань и перетащите красный цилиндр к точке сверления.',
+};
 const loading = ref(true);
 const projectName = ref('');
 const projectDescription = ref('');
 const saveState = ref('saved');
+const groupMoveError = ref('');
 const editorMode = ref('assembly');
-const leftPanelMode = ref('library');
+const partViewMode = ref('solo');
+const partContextInstanceId = ref(null);
+const leftPanelMode = ref('assembly');
 const selectedGroupId = ref(null);
 const activeAssemblyGroupId = ref(null);
 const isolatedGroupId = ref(null);
-const collapsedGroupIds = ref([]);
 const ghostedGroupIds = ref([]);
 const ghostedInstanceIds = ref([]);
 const explodeDistance = ref(0);
@@ -975,6 +997,7 @@ const showVersions = ref(false);
 const creatingPart = ref(false);
 const createError = ref('');
 const showProjectAnalysis = ref(false);
+const analysisPartId = ref(null);
 const showTemplateCreator = ref(false);
 const templateSaving = ref(false);
 const templateError = ref('');
@@ -1030,11 +1053,25 @@ const cuttingSettingFields = [
     { key: 'sheet_length_mm', label: 'Длина листа, мм', min: 100, max: 10000, step: 10 },
     { key: 'sheet_width_mm', label: 'Ширина листа, мм', min: 100, max: 10000, step: 10 },
 ];
+const visibleCuttingSettingFields = computed(() => projectAnalysis.value?.manufacturing.costing?.configured
+    ? cuttingSettingFields.filter(field => ['kerf_mm', 'edge_margin_mm'].includes(field.key))
+    : cuttingSettingFields);
+const analysisEstimateSettings = computed(() => {
+    const used = projectAnalysis.value?.manufacturing.assumptions;
+    return used ? {
+        kerf_mm: used.kerf_mm,
+        edge_margin_mm: used.edge_margin_mm,
+        linear_stock_length_mm: used.linear_stock_length_mm,
+        sheet_length_mm: used.sheet_size_mm.length,
+        sheet_width_mm: used.sheet_size_mm.width,
+    } : cuttingSettings;
+});
 const instanceQuantities = reactive({});
 const newPart = reactive({ name: '', material: '', length: 720, width: 60, thickness: 60, quantity: 0 });
 const arraySettings = reactive({ axis: 'x', copies: 3, spacing: 100 });
 const instanceToolsBusy = ref(false);
 const {
+    busy: historyBusy,
     canRedo,
     canUndo,
     record: recordHistory,
@@ -1069,8 +1106,21 @@ let partHistoryTimer = null;
 let partHistoryLabel = 'Изменение заготовки';
 let suppressPartHistory = false;
 let instanceInspectorBaseline = null;
+const instanceInspectorSaving = ref(false);
 
 const activePart = computed(() => projects.parts.find((part) => part.id === selectedPartId.value) ?? null);
+const partContextInstance = computed(() => editorMode.value === 'part' && partViewMode.value === 'assembly'
+    ? activePart.value?.instances?.find((instance) => instance.id === partContextInstanceId.value) ?? null
+    : null);
+const partContextVisibleInstanceIds = computed(() => partContextInstance.value
+    ? calculateAssemblyInstanceState(projects.assemblyGroups, projects.parts).visibleInstanceIds
+    : []);
+watch(activePart, (part) => {
+    const instances = part?.instances ?? [];
+    if (!instances.some((instance) => instance.id === partContextInstanceId.value)) {
+        partContextInstanceId.value = instances[0]?.id ?? null;
+    }
+});
 const selectedPart = computed(() => projects.parts.find((part) => part.instances?.some((instance) => instance.id === selectedInstanceId.value)) ?? null);
 const selectedInstance = computed(() => selectedPart.value?.instances.find((instance) => instance.id === selectedInstanceId.value) ?? null);
 const selectedConnection = computed(() => projects.connections.find((connection) => connection.id === selectedConnectionId.value) ?? null);
@@ -1130,7 +1180,21 @@ const ghostedAssemblyInstanceIdSet = computed(() => {
 
     return instanceIds;
 });
-const ghostedAssemblyInstanceIds = computed(() => [...ghostedAssemblyInstanceIdSet.value]);
+const assemblyPickableInstanceIds = computed(() => (
+    activeAssemblyGroupId.value === null && isolatedGroupId.value === null
+        ? null
+        : assemblyInstanceState.value.visibleInstanceIds
+));
+const viewportGhostedInstanceIds = computed(() => {
+    const ids = new Set(ghostedAssemblyInstanceIdSet.value);
+    if (activeAssemblyGroupId.value !== null && isolatedGroupId.value === null && !assemblyGuideActive.value) {
+        const inGroup = new Set(assemblyInstanceState.value.visibleInstanceIds);
+        viewportVisibleInstanceIds.value.forEach(id => {
+            if (!inGroup.has(id)) ids.add(id);
+        });
+    }
+    return [...ids];
+});
 const assemblyGuideSteps = computed(() => {
     const steps = [];
     const ungroupedInstanceIds = projects.parts.flatMap((part) => (part.instances ?? [])
@@ -1163,20 +1227,24 @@ const viewportFocusedInstanceIds = computed(() => assemblyGuideActive.value
     ? currentAssemblyGuideStep.value?.instanceIds ?? []
     : diagnosticFocusInstanceIds.value);
 const viewportVisibleInstanceIds = computed(() => {
-    const normalInstanceIds = assemblyGuideActive.value
+    let normalInstanceIds = assemblyGuideActive.value
         ? assemblyGuideVisibleInstanceIds.value
         : assemblyInstanceState.value.visibleInstanceIds;
+
+    if (!assemblyGuideActive.value && activeAssemblyGroupId.value !== null && isolatedGroupId.value === null) {
+        const global = calculateAssemblyInstanceState(projects.assemblyGroups, projects.parts);
+        normalInstanceIds = [...new Set([...normalInstanceIds, ...global.visibleInstanceIds])];
+    }
 
     return diagnosticFocusInstanceIds.value.length
         ? [...new Set([...normalInstanceIds, ...diagnosticFocusInstanceIds.value])]
         : normalInstanceIds;
 });
 const assemblyRows = computed(() => {
-    const rows = flattenAssemblyTree(
+    const rows = assemblyLevelRows(
         projects.assemblyGroups,
         projects.parts,
         activeAssemblyGroupId.value,
-        collapsedGroupIds.value,
     );
     const search = assemblySearch.value.trim().toLocaleLowerCase();
 
@@ -1187,6 +1255,18 @@ const assemblyRows = computed(() => {
 const selectedGroupDescendantIds = computed(() => selectedGroup.value
     ? new Set(descendantGroupIds(projects.assemblyGroups, selectedGroup.value.id))
     : new Set());
+const groupMoveInstanceIds = computed(() => selectedInstanceId.value !== null ? [] : allAssemblyInstances.value
+    .filter(instance => selectedGroupDescendantIds.value.has(instance.assembly_group_id))
+    .map(instance => instance.id));
+const groupMoveBlock = computed(() => {
+    if (!selectedGroup.value || selectedInstanceId.value !== null) return '';
+    if (!groupMoveInstanceIds.value.length) return 'В выбранном узле нет деталей.';
+    if (groupMoveInstanceIds.value.length > groupMoveLimit) return 'За одно действие можно переместить узел до 100 деталей.';
+    const locked = new Set(assemblyInstanceState.value.lockedInstanceIds);
+    if (groupMoveInstanceIds.value.some(id => locked.has(id))) return 'В узле есть заблокированные детали. Снимите блокировку перед перемещением.';
+    return '';
+});
+const assemblyInstancesById = computed(() => new Map(allAssemblyInstances.value.map(instance => [instance.id, instance])));
 const selectedGroupDescendantCount = computed(() => projects.parts.reduce(
     (count, part) => count + (part.instances ?? []).filter((instance) => selectedGroupDescendantIds.value.has(instance.assembly_group_id)).length,
     0,
@@ -1215,10 +1295,7 @@ const isFullDepthCut = computed(() => Number(selectedOperation.value?.cut_depth)
 const grooveSurfaceDimensions = (face, dimensions = partDraft.value?.dimensions) => surfaceDimensions(face, dimensions);
 const grooveSurfaceSize = computed(() => grooveSurfaceDimensions(selectedOperation.value?.face));
 const plungeMaximumDepth = computed(() => plungeProfileMaximumDepth(selectedOperation.value, grooveSurfaceSize.value.depth));
-const plungeProfileLabel = computed(() => plungeProfileName(selectedOperation.value?.cutter_profile));
-const grooveFaceLabel = computed(() => faceLabel(selectedOperation.value?.face));
 const roundoverMaximumRadius = computed(() => maximumRoundoverRadius(selectedOperation.value?.edge, partDraft.value?.dimensions));
-const roundoverEdgeLabel = computed(() => roundoverEdgeLabels[selectedOperation.value?.edge] ?? 'Кромка');
 const partPreview = computed(() => {
     if (!activePart.value || !partDraft.value) {
         return activePart.value;
@@ -1246,6 +1323,7 @@ const restorePartHistoryState = async (state) => {
     window.clearTimeout(partHistoryTimer);
     partHistoryTimer = null;
     suppressPartHistory = true;
+    if (selectedPartId.value !== state.partId) partViewMode.value = 'solo';
     selectedPartId.value = state.partId;
     selectedInstanceId.value = null;
     selectedOperationId.value = state.selectedOperationId;
@@ -1349,7 +1427,7 @@ const draftFromPart = (part) => {
     };
 };
 
-const openPart = async (part) => {
+const openPart = async (part, instanceId = null) => {
     if (!part) {
         showCreatePart.value = true;
         return;
@@ -1357,12 +1435,26 @@ const openPart = async (part) => {
 
     flushPartHistory();
     selectedPartId.value = part.id;
+    partContextInstanceId.value = instanceId ?? part.instances?.[0]?.id ?? null;
+    partViewMode.value = instanceId === null ? 'solo' : 'assembly';
     selectedInstanceId.value = null;
     partDraft.value = draftFromPart(part);
     selectedOperationId.value = null;
     historyExpanded.value = false;
     editorMode.value = 'part';
+    leftPanelMode.value = 'library';
     await resetPartHistoryBaseline();
+};
+
+const openCurrentPart = () => {
+    if (editorMode.value === 'part') return;
+
+    openPart(selectedPart.value ?? activePart.value ?? projects.parts[0], selectedInstanceId.value);
+};
+
+const returnToAssembly = () => {
+    if (partContextInstance.value) selectedInstanceId.value = partContextInstance.value.id;
+    editorMode.value = 'assembly';
 };
 
 const auth = useAuthStore();
@@ -1657,6 +1749,7 @@ const removePart = async () => {
     }
 
     await projects.deletePart(projectId, activePart.value.id);
+    partViewMode.value = 'solo';
     selectedPartId.value = projects.parts[0]?.id ?? null;
     partDraft.value = selectedPartId.value ? draftFromPart(projects.parts[0]) : null;
     selectedOperationId.value = null;
@@ -1693,10 +1786,22 @@ const selectInstance = (instanceId) => {
     selectedInstanceId.value = instanceId;
     selectedConnectionId.value = null;
     selectedGroupId.value = null;
+    groupMoveError.value = '';
+};
 
-    if (instanceId) {
-        selectedPartId.value = selectedPart.value?.id ?? selectedPartId.value;
-    }
+const assemblyPick = (instanceId) => resolveAssemblyPick(
+    projects.assemblyGroups,
+    assemblyInstancesById.value.get(instanceId),
+    activeAssemblyGroupId.value,
+);
+const selectAssemblyPick = (instanceId) => {
+    const pick = assemblyPick(instanceId);
+    if (pick?.kind === 'group') selectAssemblyGroup(pick.group);
+    else selectInstance(pick?.id ?? null);
+};
+const openAssemblyPick = (instanceId) => {
+    const pick = assemblyPick(instanceId);
+    if (pick?.kind === 'group') openAssemblyGroup(pick.group.id);
 };
 
 const connectionTypeLabel = (type) => connectionTypeLabels[type] ?? 'Соединение';
@@ -2005,6 +2110,8 @@ const selectAssemblyGroup = (group) => {
     leftPanelMode.value = 'assembly';
     selectedGroupId.value = group.id;
     selectedInstanceId.value = null;
+    selectedConnectionId.value = null;
+    groupMoveError.value = '';
 };
 
 const createAssemblyGroup = async () => {
@@ -2014,10 +2121,11 @@ const createAssemblyGroup = async () => {
 
     const group = await projects.createAssemblyGroup(projectId, {
         name,
-        parent_id: selectedGroupId.value ?? activeAssemblyGroupId.value,
+        parent_id: activeAssemblyGroupId.value,
     });
     selectedGroupId.value = group.id;
     selectedInstanceId.value = null;
+    selectedConnectionId.value = null;
     editorMode.value = 'assembly';
 };
 
@@ -2083,17 +2191,16 @@ const openAssemblyGroup = (groupId) => {
     isolatedGroupId.value = null;
     selectedGroupId.value = groupId;
     selectedInstanceId.value = null;
+    selectedConnectionId.value = null;
+    assemblySearch.value = '';
+    groupMoveError.value = '';
     editorMode.value = 'assembly';
     leftPanelMode.value = 'assembly';
 };
 
-const toggleGroupCollapsed = (groupId) => {
-    collapsedGroupIds.value = collapsedGroupIds.value.includes(groupId)
-        ? collapsedGroupIds.value.filter((id) => id !== groupId)
-        : [...collapsedGroupIds.value, groupId];
+const openParentAssemblyGroup = () => {
+    if (activeAssemblyGroup.value) openAssemblyGroup(activeAssemblyGroup.value.parent_id);
 };
-
-const isGroupCollapsed = (groupId) => collapsedGroupIds.value.includes(groupId);
 
 const removeSelectedGroup = async () => {
     if (!selectedGroup.value || !window.confirm(`Удалить узел «${selectedGroup.value.name}»?`)) return;
@@ -2119,7 +2226,12 @@ const assignSelectedInstance = async (groupId) => {
     await projects.fetchAssemblyGroups(projectId);
 };
 
-const beginInstanceInspectorEdit = () => {
+const beginInstanceInspectorEdit = (event) => {
+    if (instanceInspectorSaving.value) {
+        event.preventDefault();
+        return;
+    }
+
     if (!selectedInstance.value) return;
 
     instanceInspectorBaseline = {
@@ -2130,40 +2242,38 @@ const beginInstanceInspectorEdit = () => {
 };
 
 const saveInstance = async () => {
-    if (!selectedInstance.value) {
+    if (!selectedInstance.value || instanceInspectorSaving.value) {
         return;
     }
 
     const instance = selectedInstance.value;
-    await projects.updateInstance(projectId, instance.id, {
-        position_x: instance.position.x,
-        position_y: instance.position.y,
-        position_z: instance.position.z,
-        rotation_x: instance.rotation.x,
-        rotation_y: instance.rotation.y,
-        rotation_z: instance.rotation.z,
-        mirrored: instance.mirrored,
-    });
+    const instanceId = instance.id;
+    const before = instanceInspectorBaseline;
+    instanceInspectorBaseline = null;
+    instanceInspectorSaving.value = true;
 
-    if (instanceInspectorBaseline) {
-        const instanceId = instance.id;
-        const before = cloneEditorValue(instanceInspectorBaseline);
-        const after = {
-            position: { ...instance.position },
-            rotation: { ...instance.rotation },
+    try {
+        const saved = await projects.updateInstance(projectId, instanceId, {
+            position_x: instance.position.x,
+            position_y: instance.position.y,
+            position_z: instance.position.z,
+            rotation_x: instance.rotation.x,
+            rotation_y: instance.rotation.y,
+            rotation_z: instance.rotation.z,
             mirrored: instance.mirrored,
-        };
+        });
+        const after = { position: saved.position, rotation: saved.rotation, mirrored: saved.mirrored };
 
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
+        if (before && JSON.stringify(before) !== JSON.stringify(after)) {
             recordHistory({
                 label: 'Точное размещение детали',
                 undo: () => persistInstanceTransform(instanceId, before.position, before.rotation, before.mirrored),
                 redo: () => persistInstanceTransform(instanceId, after.position, after.rotation, after.mirrored),
             });
         }
+    } finally {
+        instanceInspectorSaving.value = false;
     }
-
-    instanceInspectorBaseline = null;
 };
 
 const persistInstanceTransform = async (instanceId, position, rotation, mirrored = null) => {
@@ -2312,6 +2422,74 @@ const commitInstanceTransform = async ({ instanceId, position, rotation, initial
     }
 };
 
+const commitGroupMove = async ({ members, axis, value }) => {
+    if (groupMoveBlock.value || !['x', 'y', 'z'].includes(axis) || !Number.isFinite(value)) return;
+
+    const before = members.map(({ id, position }) => ({ id, position }));
+    const after = before.map(({ id, position }) => ({ id, position: translatedPosition(position, axis, value) }));
+    if (before.every(({ position }, index) => Number(position[axis]) === after[index].position[axis])) return;
+    groupMoveError.value = '';
+    saveState.value = 'saving';
+
+    try {
+        await projects.moveAssemblyInstances(projectId, before, after, axis);
+        recordHistory({
+            label: 'Перемещение узла',
+            undo: () => projects.moveAssemblyInstances(projectId, after, before, axis),
+            redo: () => projects.moveAssemblyInstances(projectId, before, after, axis),
+        });
+        saveState.value = 'saved';
+    } catch (error) {
+        saveState.value = 'error';
+        groupMoveError.value = error.response?.data?.message || error.message;
+    }
+};
+
+const commitScale = async ({ members, pivot, axis, value }) => {
+    groupMoveError.value = '';
+    saveState.value = 'saving';
+
+    try {
+        const { variants, bindings } = planAssemblyScale(members, pivot, axis, value);
+        if (variants.length + bindings.length > groupMoveLimit) {
+            throw new Error('Слишком много деталей и заготовок для одного масштаба. Выберите узел меньшего размера.');
+        }
+
+        const command = (id, part, position) => ({
+            type: 'transform_instance',
+            instance_id: id,
+            ...part,
+            data: { position_x: position.x, position_y: position.y, position_z: position.z },
+        });
+        const before = bindings.map(({ id, originalPartId, originalPosition }, index) => ({
+            id, partId: originalPartId, position: originalPosition,
+            rotation: members[index].instance.rotation, partUpdatedAt: members[index].part.updated_at,
+        }));
+        const results = await projects.applyAssemblyScale(projectId, before, [
+            ...variants,
+            ...bindings.map(({ id, partRef, position }) => command(id, { part_ref: partRef }, position)),
+        ]);
+        const createdParts = new Map(results.filter(result => result.type === 'create_part')
+            .map(result => [result.temporary_id, result.part_id]));
+        const after = bindings.map(({ id, partRef, position }) => ({ id, partId: createdParts.get(partRef), position }));
+        const restore = async (expected, target) => {
+            await projects.applyAssemblyScale(projectId, expected, target.map(({ id, partId, position }) => command(id, { part_id: partId }, position)));
+            await projects.fetchParts(projectId);
+        };
+        recordHistory({
+            label: 'Масштабирование',
+            undo: () => restore(after, before),
+            redo: () => restore(before, after),
+        });
+        await projects.fetchParts(projectId);
+        saveState.value = 'saved';
+    } catch (error) {
+        saveState.value = 'error';
+        groupMoveError.value = Object.values(error.response?.data?.errors ?? {}).flat().join(' ')
+            || error.response?.data?.message || error.message;
+    }
+};
+
 const removeInstance = async () => {
     if (!selectedInstance.value) {
         return;
@@ -2370,7 +2548,17 @@ const saveProject = async () => {
 const saveCurrent = () => editorMode.value === 'part' ? savePart() : saveProject();
 const handleEditorHistoryKey = (event) => {
     if (showScriptEditor.value || showVersions.value) return;
-    if (event.shiftKey && event.key.toLowerCase() === 'd' && editorMode.value === 'assembly' && selectedInstance.value) {
+    if (event.key === 'ArrowUp' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+        && !event.defaultPrevented && !event.isComposing
+        && editorMode.value === 'assembly' && activeAssemblyGroup.value
+        && !showCreatePart.value && !showProjectAnalysis.value && !showTemplateCreator.value
+        && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName) && !event.target?.isContentEditable) {
+        event.preventDefault();
+        if (!event.repeat) openParentAssemblyGroup();
+        return;
+    }
+
+    if (event.shiftKey && assemblyShortcutKey(event) === 'd' && editorMode.value === 'assembly' && selectedInstance.value) {
         if (!event.repeat && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName) && !event.target?.isContentEditable) {
             event.preventDefault();
             duplicateSelectedInstance();
@@ -2379,7 +2567,7 @@ const handleEditorHistoryKey = (event) => {
         return;
     }
 
-    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z') return;
+    if (!(event.ctrlKey || event.metaKey) || assemblyShortcutKey(event) !== 'z') return;
     if (['INPUT', 'TEXTAREA'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
 
     event.preventDefault();
@@ -2397,7 +2585,8 @@ onBeforeUnmount(() => {
     window.removeEventListener('keydown', handleEditorHistoryKey);
 });
 
-const openProjectAnalysis = async () => {
+const openProjectAnalysis = async (partId = null) => {
+    analysisPartId.value = partId;
     showProjectAnalysis.value = true;
     await refreshProjectAnalysis();
 };

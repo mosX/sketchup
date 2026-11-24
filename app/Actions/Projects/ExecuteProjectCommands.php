@@ -106,7 +106,7 @@ class ExecuteProjectCommands
         return match ($command['type']) {
             'create_part' => $this->createPart($project, $command, $partReferences),
             'create_instance' => $this->createInstance($project, $command, $index, $partReferences, $instanceReferences, $groupReferences),
-            'transform_instance' => $this->transformInstance($project, $command, $index, $instanceReferences),
+            'transform_instance' => $this->transformInstance($project, $command, $index, $instanceReferences, $partReferences),
             'delete_instance' => $this->deleteInstance($project, $command, $index, $instanceReferences),
             'create_group' => $this->createGroup($project, $command, $index, $groupReferences),
             'update_group' => $this->updateGroup($project, $command, $index, $groupReferences),
@@ -291,14 +291,26 @@ class ExecuteProjectCommands
      * @param  array<string, PartInstance>  $instanceReferences
      * @return array<string, mixed>
      */
-    private function transformInstance(Project $project, array $command, int $index, array $instanceReferences): array
+    private function transformInstance(Project $project, array $command, int $index, array $instanceReferences, array $partReferences): array
     {
         $instance = $this->resolveInstance($project, $command, $index, $instanceReferences);
-        $instance->update($command['data']);
+        if (isset($command['part_id']) || isset($command['part_ref'])) {
+            $part = $this->resolvePart($project, $command, $index, $partReferences);
+            if ($part->id !== $instance->part_definition_id && $project->projectConnections()
+                ->where(fn ($query) => $query->where('primary_instance_id', $instance->id)
+                    ->orWhere('secondary_instance_id', $instance->id))->exists()) {
+                throw ValidationException::withMessages([
+                    "commands.{$index}.part_id" => ['Cannot replace the part definition of an instance linked by a connection.'],
+                ]);
+            }
+            $instance->partDefinition()->associate($part);
+        }
+        $instance->fill($command['data'])->save();
 
         return [
             'type' => 'transform_instance',
             'instance_id' => $instance->id,
+            'part_id' => $instance->part_definition_id,
         ];
     }
 

@@ -80,7 +80,7 @@ class ProjectVersionManager
     {
         $snapshot = [
             'schema_version' => 1,
-            'project' => $project->only(['name', 'description', 'scene_data', 'script_data']),
+            'project' => $project->only(['name', 'description', 'scene_data', 'script_data', 'material_plan']),
             'parts' => $project->partDefinitions()->orderBy('id')->get()->map->getAttributes()->all(),
             'groups' => $project->assemblyGroups()->orderBy('id')->get()->map->getAttributes()->all(),
             'instances' => $project->partInstances()->orderBy('id')->get()->map->getAttributes()->all(),

@@ -15,7 +15,7 @@ class CapabilityController extends Controller
         return response()->json([
             'data' => [
                 'api_version' => 'v1',
-                'schema_version' => 10,
+                'schema_version' => 11,
                 'coordinate_system' => [
                     'units' => 'millimeters',
                     'angles' => 'degrees',
@@ -39,6 +39,10 @@ class CapabilityController extends Controller
                     'instances_reference_group_by' => 'assembly_group_id',
                     'supports_nested_groups' => true,
                     'delete_contents_is_explicit' => true,
+                ],
+                'instance_transforms' => [
+                    'optional_part_reference' => ['part_id', 'part_ref'],
+                    'part_replacement_requires_no_connections' => true,
                 ],
                 'project_analysis' => [
                     'diagnostics' => ['warnings', 'review_items', 'rotated_bounds'],

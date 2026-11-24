@@ -73,42 +73,22 @@ export const assemblyInstanceState = (groups, parts, activeRootId = null, isolat
     return { visibleInstanceIds, lockedInstanceIds };
 };
 
-export const flattenAssemblyTree = (groups, parts, rootId = null, collapsedIds = []) => {
-    const collapsed = new Set(collapsedIds);
-    const sortedGroups = [...groups].sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name));
-    const childrenByParent = new Map();
-    const instancesByGroup = new Map();
+export const assemblyLevelRows = (groups, parts, parentId = null) => [
+    ...groups.filter(group => group.parent_id === parentId)
+        .sort((left, right) => left.sort_order - right.sort_order || left.name.localeCompare(right.name))
+        .map(group => ({ kind: 'group', id: `group-${group.id}`, group })),
+    ...allInstances(parts).filter(({ instance }) => instance.assembly_group_id === parentId)
+        .map(({ instance, part }) => ({ kind: 'instance', id: `instance-${instance.id}`, instance, part })),
+];
 
-    sortedGroups.forEach((group) => {
-        const children = childrenByParent.get(group.parent_id) ?? [];
-        children.push(group);
-        childrenByParent.set(group.parent_id, children);
-    });
+export const resolveAssemblyPick = (groups, instance, activeGroupId = null) => {
+    if (!instance) return null;
 
-    allInstances(parts).forEach((item) => {
-        const groupInstances = instancesByGroup.get(item.instance.assembly_group_id) ?? [];
-        groupInstances.push(item);
-        instancesByGroup.set(item.instance.assembly_group_id, groupInstances);
-    });
+    const path = assemblyBreadcrumbs(groups, instance.assembly_group_id);
+    const level = activeGroupId === null ? 0 : path.findIndex(group => group.id === activeGroupId) + 1;
+    if (activeGroupId !== null && level === 0) return null;
 
-    const rows = [];
-    const appendBranch = (parentId, depth) => {
-        (childrenByParent.get(parentId) ?? []).forEach((group) => {
-            rows.push({ kind: 'group', id: `group-${group.id}`, depth, group });
-
-            if (collapsed.has(group.id)) return;
-
-            (instancesByGroup.get(group.id) ?? []).forEach(({ instance, part }) => {
-                rows.push({ kind: 'instance', id: `instance-${instance.id}`, depth: depth + 1, instance, part });
-            });
-            appendBranch(group.id, depth + 1);
-        });
-    };
-
-    (instancesByGroup.get(rootId) ?? []).forEach(({ instance, part }) => {
-        rows.push({ kind: 'instance', id: `instance-${instance.id}`, depth: 0, instance, part });
-    });
-    appendBranch(rootId, 0);
-
-    return rows;
+    return path[level]
+        ? { kind: 'group', group: path[level] }
+        : { kind: 'instance', id: instance.id };
 };

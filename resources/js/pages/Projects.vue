@@ -51,12 +51,9 @@
 
             <div v-else-if="projects.items.length" class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 <article v-for="project in filteredProjects" :key="project.id" class="project-card group">
-                    <router-link :to="{ name: 'editor', params: { id: project.id } }" class="project-preview">
-                        <div class="preview-grid" aria-hidden="true"></div>
-                        <div class="preview-object" aria-hidden="true">
-                            <span></span><span></span><span></span>
-                        </div>
-                        <span class="project-preview-label">Изделие <span aria-hidden="true">↗</span></span>
+                    <router-link :to="{ name: 'editor', params: { id: project.id } }" class="project-preview" :aria-label="`Открыть проект «${project.name}»`">
+                        <ProjectPreview :project-id="project.id" :revision="project.revision" />
+                        <span class="project-preview-label" aria-hidden="true"><span>↗</span></span>
                     </router-link>
                     <div class="p-5">
                         <div class="flex items-start justify-between gap-4">
@@ -90,6 +87,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '../layouts/AppLayout.vue';
+import ProjectPreview from '../components/ProjectPreview.vue';
 import { useProjectsStore } from '../stores/projects';
 
 const projects = useProjectsStore();

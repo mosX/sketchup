@@ -174,6 +174,10 @@ class ExecuteProjectCommandsRequest extends FormRequest
             'instance_ref' => ['required_without:instance_id', 'string', 'max:100'],
             'data' => [Rule::requiredIf($type === 'transform_instance'), 'array:position_x,position_y,position_z,rotation_x,rotation_y,rotation_z,mirrored'],
             ...($type === 'transform_instance' ? $this->transformRules() : []),
+            ...($type === 'transform_instance' ? [
+                'part_id' => ['sometimes', 'integer', 'min:1', 'prohibits:part_ref'],
+                'part_ref' => ['sometimes', 'string', 'max:100', 'prohibits:part_id'],
+            ] : []),
         ];
     }
 

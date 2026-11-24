@@ -15,14 +15,14 @@ export const applyMeshAppearance = (mesh, { selected, ghosted, dimmed }) => {
         material.transparent = transparent;
         material.opacity = opacity;
     };
-    mesh.material.emissive.set(selected ? '#315f4a' : '#000000');
-    mesh.material.emissiveIntensity = selected ? 0.24 : 0;
+    mesh.material.emissive.set(selected ? '#24aaff' : '#000000');
+    mesh.material.emissiveIntensity = selected ? 0.62 : 0;
     setTransparency(mesh.material, dimmed ? 0.07 : ghosted ? 0.2 : 1);
     mesh.material.depthWrite = !transparent;
     mesh.renderOrder = transparent ? 1 : 0;
     const edges = mesh.userData.edges;
     if (edges) {
-        edges.material.color.set(selected ? '#173d30' : '#6f5235');
-        setTransparency(edges.material, dimmed ? 0.08 : ghosted ? 0.32 : 1);
+        edges.material.color.set(selected ? '#003c77' : '#6f5235');
+        setTransparency(edges.material, selected ? 0.95 : dimmed ? 0.08 : ghosted ? 0.32 : 1);
     }
 };

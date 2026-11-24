@@ -51,11 +51,6 @@
     .project-card:hover { transform: translateY(-3px); box-shadow: 0 18px 45px rgb(34 48 40 / .1); }
     .project-preview { position: relative; display: block; height: 12rem; overflow: hidden; background: #e8ece8; }
     .preview-grid { position: absolute; inset: 0; background-image: linear-gradient(rgb(68 88 77 / .09) 1px, transparent 1px), linear-gradient(90deg, rgb(68 88 77 / .09) 1px, transparent 1px); background-size: 24px 24px; transform: perspective(320px) rotateX(58deg) scale(1.7) translateY(25%); }
-    .preview-object { position: absolute; top: 50%; left: 50%; width: 7.5rem; height: 4.6rem; transform: translate(-50%, -46%) rotate(-8deg) skewY(2deg); }
-    .preview-object span { position: absolute; display: block; border: 1px solid rgb(93 61 32 / .42); background: #bc8c59; box-shadow: 0 14px 24px rgb(68 47 27 / .16); }
-    .preview-object span:first-child { inset: 0; }
-    .preview-object span:nth-child(2) { right: 10%; bottom: -18px; left: 10%; height: 18px; background: #9a7048; transform: skewX(-42deg); }
-    .preview-object span:nth-child(3) { top: 8%; right: -14px; width: 14px; height: 100%; background: #a97a4c; transform: skewY(-48deg); }
     .icon-button { display: grid; width: 2rem; height: 2rem; flex-shrink: 0; place-items: center; border: 1px solid #e5e5e0; border-radius: .6rem; color: #9a9d9b; font-size: 1.2rem; }
     .icon-button:hover { border-color: #fecaca; background: #fef2f2; color: #b42318; }
     .empty-state { display: grid; min-height: 24rem; place-items: center; align-content: center; border: 1px dashed #d2d5d1; border-radius: 1.25rem; background: rgb(255 255 255 / .55); padding: 3rem; text-align: center; }
@@ -108,6 +103,7 @@
     .offcut-legend i { width: .8rem; height: .55rem; border: 1px dashed #a6422b; border-radius: .12rem; background: rgb(217 108 72 / .32); }
     .scene-transform-hud { position: absolute; z-index: 4; bottom: 3.1rem; left: 50%; display: grid; min-width: 19rem; transform: translateX(-50%); gap: .38rem; border: 1px solid rgb(33 55 44 / .16); border-radius: .72rem; background: rgb(250 251 248 / .94); padding: .65rem .8rem; box-shadow: 0 10px 30px rgb(31 47 39 / .12); color: #4a554f; text-align: center; backdrop-filter: blur(10px); }
     .scene-transform-hud > div { display: flex; align-items: center; justify-content: center; gap: .45rem; }
+    .scene-transform-hud { pointer-events: none; }
     .scene-transform-hud strong { font-size: .69rem; }
     .scene-transform-hud p { color: #65706a; font-size: .61rem; }
     .scene-transform-hud small { color: #969d99; font-size: .51rem; }

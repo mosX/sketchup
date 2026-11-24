@@ -1,5 +1,11 @@
 /* Shared workshop surfaces and editor layout. */
 @layer components {
+    input[data-scrub-number] { appearance: textfield; }
+    input[data-scrub-number]::-webkit-inner-spin-button,
+    input[data-scrub-number]::-webkit-outer-spin-button { appearance: none; }
+    input[data-scrub-number]:not(:disabled):not([readonly]) { cursor: ew-resize; }
+    input[data-scrub-number]:focus-visible { cursor: text; }
+    input[data-scrubbing] { outline: 2px solid #388566; outline-offset: -2px; user-select: none; }
     .workshop-layout { background: #f6f3ed; }
     .workshop-welcome { position: relative; overflow: hidden; border-radius: 24px; background: #145747; padding: clamp(24px, 4vw, 48px); color: #fffdf6; }
     .workshop-welcome .eyebrow { color: #edc780; }
@@ -13,7 +19,7 @@
     .project-preview { height: 160px; background: #e2ebe2; }
     .project-card:nth-child(3n + 2) .project-preview { background: #f1e3ce; }
     .project-card:nth-child(3n + 3) .project-preview { background: #dfe9ed; }
-    .project-preview-label { position: absolute; inset: 16px 16px auto; display: flex; justify-content: space-between; color: #365248; font-size: 12px; font-weight: 600; }
+    .project-preview-label { position: absolute; inset: 16px 16px auto; display: flex; justify-content: flex-end; color: #365248; font-size: 12px; font-weight: 600; }
     .project-preview-label span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; background: #ffffffb3; }
     .button-primary { background: #14735a; border-color: #14735a; box-shadow: 0 3px 8px #14574718; }
     .button-primary:hover:not(:disabled) { background: #105d49; }
@@ -39,7 +45,37 @@
     .parts-library, .inspector-panel { background: #fffefb; scrollbar-width: thin; scrollbar-color: #b9cbbd transparent; }
     .parts-library-header { min-height: 76px; }
     .inspector-heading { font-size: 13px; letter-spacing: .02em; text-transform: none; color: #263e31; }
-    .inspector-section { padding: 18px; border-color: #e6e9df; }
+    .inspector-section { padding: 10px 12px; border-color: #e6e9df; }
+    .inspector-context { position: sticky; top: 0; z-index: 2; background: #f5f8f1; }
+    .inspector-kicker { color: #5d7062; font-size: 11px; font-weight: 650; }
+    .inspector-name { color: #1e3428; font-size: 15px; font-weight: 750; line-height: 1.4; }
+    .inspector-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+    .inspector-action { display: inline-flex; min-height: 32px; min-width: 32px; align-items: center; justify-content: center; gap: 5px; border: 1px solid #d9e2d8; border-radius: 6px; background: white; padding: 0 6px; color: #345647; font-size: 11px; font-weight: 650; white-space: nowrap; }
+    .inspector-action svg { width: 16px; height: 16px; flex: none; }
+    .inspector-action:hover:not(:disabled) { border-color: #93ae9a; background: #eaf1e8; }
+    .inspector-action[aria-pressed='true'] { border-color: #8db5a1; background: #dceee2; color: #174f3c; }
+    .inspector-action:disabled { cursor: not-allowed; opacity: .45; }
+    .inspector-disclosure > summary { display: flex; min-height: 26px; align-items: center; gap: 7px; list-style: none; color: #263e31; font-size: 12px; font-weight: 750; }
+    .inspector-disclosure > summary::-webkit-details-marker { display: none; }
+    .inspector-disclosure > summary::before { content: ''; width: 6px; height: 6px; flex: none; transform: rotate(-45deg); border-right: 1.5px solid #688274; border-bottom: 1.5px solid #688274; }
+    .inspector-disclosure[open] > summary::before { transform: rotate(45deg) translateY(-1px); }
+    .inspector-disclosure > summary:hover { color: #145747; }
+    .inspector-disclosure-body { margin-top: 7px; }
+    .inspector-panel .inspector-inline-field { grid-template-columns: minmax(62px, auto) minmax(0, 1fr); align-items: center; }
+    .inspector-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 7px; }
+    .inspector-readout { display: grid; gap: 1px; border: 1px solid #e5eadf; border-radius: 6px; background: #f5f7f1; padding: 4px 7px; }
+    .inspector-readout dt { color: #596b60; font-size: 10px; }
+    .inspector-readout dd { color: #263e31; font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .inspector-transform-row { display: grid; grid-template-columns: 70px repeat(3, minmax(0, 1fr)); align-items: center; gap: 4px; margin-top: 6px; color: #475c50; font-size: 11px; font-weight: 650; }
+    .inspector-axis { display: flex; min-width: 0; min-height: 30px; align-items: center; gap: 3px; border: 1px solid #dce4da; border-radius: 6px; padding-inline: 4px; background: white; }
+    .inspector-axis[data-axis='x'] > span { color: #a93b32; }
+    .inspector-axis[data-axis='y'] > span { color: #257046; }
+    .inspector-axis[data-axis='z'] > span { color: #265c9b; }
+    .inspector-axis input { width: 100%; min-width: 0; padding: 3px 0; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; appearance: textfield; }
+    .inspector-axis input::-webkit-inner-spin-button, .inspector-axis input::-webkit-outer-spin-button { appearance: none; }
+    .inspector-shortcuts { display: inline-flex; gap: 3px; }
+    .inspector-shortcuts kbd { border: 1px solid #d9e2d8; border-radius: 4px; background: #f4f7f2; padding: 0 4px; color: #496455; font-size: 10px; }
+    .inspector-panel .inspector-text-action { padding: 4px 0; min-height: 26px; border: 0; background: none; }
     .library-search { padding: 12px 14px 2px; }
     .library-search input { width: 100%; border: 1px solid #dae1d6; border-radius: 9px; padding: 9px 11px; background: #f6f8f2; font-size: 13px; }
     .part-library-card { border-color: #e0e5d9; }
@@ -50,12 +86,23 @@
     .editor-field, .dimension-field, .cut-field { color: #596b60; font-size: 12px; }
     .editor-field input, .editor-field select, .dimension-field input, .cut-field input { color: #263e31; font-size: 13px; }
     .dimension-field input { min-height: 36px; background: #f5f7f0; }
-    .operation-add-grid { gap: 8px; }
-    .operation-add-grid button { border-style: solid; min-height: 66px; font-size: 12px; background: #f2f6eb; color: #355a41; }
+    .inspector-panel :is(.editor-field, .dimension-field, .cut-field) { gap: 3px; font-size: 11px; }
+    .inspector-panel :is(.editor-field input:not([type='range']):not([type='checkbox']), .editor-field select, .dimension-field input, .dimension-field select, .cut-field div) { min-width: 0; height: 30px; min-height: 30px; border-radius: 6px; }
+    .inspector-panel :is(.editor-field input:not([type='range']):not([type='checkbox']), .editor-field select, .dimension-field input, .dimension-field select) { padding: 2px 6px; font-size: 12px; }
+    .inspector-panel .cut-field input { padding-left: 6px; font-size: 12px; }
+    .inspector-panel .cut-field b { padding-right: 6px; }
+    .inspector-panel .editor-textarea { min-height: 54px; padding: 6px 8px; }
+    .operation-add-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 7px; }
+    .operation-add-grid button { border-style: solid; min-height: 40px; padding: 4px 2px; font-size: 10px; background: #f2f6eb; color: #355a41; }
     .operation-add-grid button:hover { background: #e5efd7; border-color: #7eab68; }
     .operation-row strong, .operation-history-row strong { font-size: 12px; }
     .operation-row small, .operation-history-row small, .operation-tip, .operation-empty, .apply-operations-note { color: #68766b; font-size: 11px; line-height: 1.6; }
-    .operation-row-actions button { width: 26px; height: 26px; }
+    .operation-row { padding: 3px 4px; gap: 5px; }
+    .operation-row-actions button { width: 23px; height: 25px; }
+    .operation-row-summary { min-width: 0; text-align: left; }
+    .operation-row-summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .inspector-operation-help { margin-top: 7px; color: #496455; font-size: 11px; }
+    .inspector-operation-help p { margin-top: 4px; color: #596b60; }
     .view-tabs { left: 12px; right: 12px; top: 12px; width: auto; max-width: calc(100% - 24px); transform: none; overflow-x: auto; flex-wrap: nowrap; background: #fffefbf2; }
     .view-tab { flex-shrink: 0; white-space: nowrap; font-size: 12px; color: #617367; padding: 10px; }
     .view-tab-active { background: #e7f0df; color: #285739; }

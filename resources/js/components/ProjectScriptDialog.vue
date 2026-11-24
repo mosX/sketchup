@@ -37,7 +37,7 @@
                 <section class="flex min-h-[420px] flex-col gap-3 p-4">
                     <div v-if="parameterDefinitions.length" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                         <div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">Параметры изделия</h3><button type="button" class="text-xs text-emerald-800 underline" :disabled="busy" @click="parameterValues = {}">Сбросить</button></div>
-                        <div class="grid max-h-48 grid-cols-2 gap-3 overflow-auto"><label v-for="item in parameterDefinitions" :key="item.name" class="flex flex-col gap-1 text-xs">{{ item.label }}<input v-model.number="parameterValues[item.name]" :placeholder="String(item.default)" :disabled="busy" type="number" :min="item.min" :max="item.max" :step="item.step" class="rounded-lg border border-emerald-200 bg-white p-2 text-sm"></label></div>
+                        <div class="grid max-h-48 grid-cols-2 gap-3 overflow-auto"><label v-for="item in parameterDefinitions" :key="item.name" class="flex flex-col gap-1 text-xs">{{ item.label }}<input v-scrub-number v-model.number="parameterValues[item.name]" :placeholder="String(item.default)" :disabled="busy" type="number" :min="item.min" :max="item.max" :step="item.step" class="rounded-lg border border-emerald-200 bg-white p-2 text-sm"></label></div>
                         <p class="mt-2 text-xs text-emerald-800">После изменения нажмите «Предпросмотр».</p>
                     </div>
                     <div class="flex items-center justify-between text-sm"><h3 class="font-semibold">Предпросмотр результата</h3><span class="text-xs text-stone-500">{{ previewParts.length }} заготовок · {{ instanceCount }} деталей</span></div>
@@ -60,6 +60,7 @@
 </template>
 
 <script setup>
+import { vScrubNumber } from '../editor/scrubNumber.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import axios from 'axios';
 import ThreeViewport from './ThreeViewport.vue';

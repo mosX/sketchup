@@ -29,6 +29,7 @@ class Project extends Model
         return [
             'scene_data' => 'array',
             'script_data' => 'array',
+            'material_plan' => 'array',
             'revision' => 'integer',
         ];
     }
@@ -61,5 +62,10 @@ class Project extends Model
     public function projectVersions(): HasMany
     {
         return $this->hasMany(ProjectVersion::class);
+    }
+
+    public function projectEstimates(): HasMany
+    {
+        return $this->hasMany(ProjectEstimate::class);
     }
 }

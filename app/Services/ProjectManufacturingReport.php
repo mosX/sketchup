@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\CatalogMaterial;
 use App\Models\PartDefinition;
 use App\Models\Project;
 use Illuminate\Support\Collection;
@@ -31,6 +32,7 @@ class ProjectManufacturingReport
             ->sortBy([['material', 'asc'], ['name', 'asc']])
             ->values()
             ->all();
+        $materialPlan = $this->materialPlan($project, $usedParts, $settings);
 
         return [
             'summary' => [
@@ -41,8 +43,13 @@ class ProjectManufacturingReport
                 ), 2),
             ],
             'bill_of_materials' => $billOfMaterials,
-            'linear_cutting' => $this->linearCutting($usedParts->reject($this->isSheetPart(...))->values(), $settings),
-            'sheet_cutting' => $this->sheetCutting($usedParts->filter($this->isSheetPart(...))->values(), $settings),
+            'linear_cutting' => $project->material_plan === null
+                ? $this->linearCutting($usedParts->reject($this->isSheetPart(...))->values(), $settings)
+                : $materialPlan['boards'],
+            'sheet_cutting' => $project->material_plan === null
+                ? $this->sheetCutting($usedParts->filter($this->isSheetPart(...))->values(), $settings)
+                : $materialPlan['sheets'],
+            'costing' => $materialPlan['costing'],
             'assumptions' => [
                 'kerf_mm' => $settings['kerf'],
                 'linear_stock_length_mm' => $settings['stock_length'],
@@ -50,6 +57,129 @@ class ProjectManufacturingReport
                 'edge_margin_mm' => $settings['margin'],
                 'note' => 'The cutting map is a preliminary first-fit layout. Confirm stock sizes, grain direction, defects, and machining allowances before production.',
             ],
+        ];
+    }
+
+    private function materialPlan(Project $project, Collection $parts, array $settings): array
+    {
+        $plan = $project->material_plan ?? [];
+        $assignments = collect($plan['assignments'] ?? [])->pluck('material_id', 'part_id');
+        $supplies = collect($plan['supplies'] ?? []);
+        $catalogIds = $assignments->values()->merge($supplies->pluck('material_id'))->push($plan['default_material_id'] ?? null)
+            ->filter()->unique();
+        $catalog = CatalogMaterial::query()->where('user_id', $project->user_id)->whereIn('id', $catalogIds)->get()->keyBy('id');
+
+        $groups = [];
+        $issues = [];
+        $items = [];
+        $boards = [];
+        $sheets = [];
+
+        foreach ($parts as $part) {
+            $material = $catalog->get($assignments->get($part->id, $plan['default_material_id'] ?? null));
+            if ($material === null) {
+                $issues[] = $this->partIssue($part, 'unassigned');
+
+                continue;
+            }
+            if (! $this->matchesStock($part, $material)) {
+                $issues[] = $this->partIssue($part, 'incompatible', $material);
+
+                continue;
+            }
+            $groups[$material->id][] = $part;
+        }
+
+        foreach ($groups as $id => $group) {
+            $material = $catalog->get($id);
+            if ($material->kind === 'board') {
+                $stockSettings = array_replace($settings, ['stock_length' => (float) $material->length_mm]);
+                $map = $this->linearMap(collect($group), $stockSettings, $material->name);
+                $map['catalog_material_id'] = $id;
+                $boards[] = $map;
+                $packs = count($map['bars']);
+                $used = array_sum(array_column($map['bars'], 'used_length')) / $stockSettings['stock_length'];
+                $unit = 'доска';
+            } else {
+                $stockSettings = array_replace($settings, ['sheet_length' => (float) $material->length_mm, 'sheet_width' => (float) $material->width_mm]);
+                $map = $this->sheetMap(collect($group), $stockSettings, $material->name);
+                $map['catalog_material_id'] = $id;
+                $sheets[] = $map;
+                $packs = count($map['sheets']);
+                $used = $packs - array_sum(array_column($map['sheets'], 'reusable_area')) / ($stockSettings['sheet_length'] * $stockSettings['sheet_width']);
+                $unit = 'лист';
+            }
+            if ($packs > 0) {
+                $items[] = $this->costItem($material, $unit, $used, $packs, 1);
+            }
+            if ($map['oversized'] !== []) {
+                $oversizedIds = array_column($map['oversized'], 'part_id');
+                foreach ($group as $part) {
+                    if (in_array($part->id, $oversizedIds, true)) {
+                        $issues[] = $this->partIssue($part, 'oversized', $material);
+                    }
+                }
+            }
+        }
+
+        foreach ($supplies as $supply) {
+            $material = $catalog->get($supply['material_id']);
+            if ($material === null) {
+                continue;
+            }
+            $quantity = (float) $supply['quantity'];
+            $packSize = (float) $material->pack_quantity;
+            $items[] = $this->costItem($material, $material->unit, $quantity, (int) ceil(round($quantity / $packSize, 10)), $packSize);
+        }
+
+        return [
+            'boards' => $boards,
+            'sheets' => $sheets,
+            'costing' => [
+                'currency' => 'UAH',
+                'configured' => $project->material_plan !== null,
+                'complete' => $issues === [] && collect($items)->every(fn (array $item): bool => $item['pack_price_minor'] !== null),
+                'consumed_minor' => array_sum(array_column($items, 'consumed_minor')),
+                'purchase_minor' => array_sum(array_column($items, 'purchase_minor')),
+                'items' => $items,
+                'issues' => $issues,
+            ],
+        ];
+    }
+
+    private function matchesStock(PartDefinition $part, CatalogMaterial $material): bool
+    {
+        return (float) $part->thickness === (float) $material->thickness_mm
+            && ($material->kind === 'sheet' || (
+                $material->kind === 'board' && (float) $part->width === (float) $material->width_mm
+                && $part->grain_axis !== 'width'
+            ));
+    }
+
+    private function partIssue(PartDefinition $part, string $reason, ?CatalogMaterial $material = null): array
+    {
+        return ['part_id' => $part->id, 'name' => $part->name, 'quantity' => $part->instances->count(), 'reason' => $reason, 'material' => $material?->name];
+    }
+
+    private function costItem(CatalogMaterial $material, string $unit, float $quantity, int $packs, float $packSize): array
+    {
+        $priceMinor = $material->price === null ? null : (int) round((float) $material->price * 100);
+
+        $consumedMinor = $priceMinor === null ? null : (int) round($quantity / $packSize * $priceMinor);
+        $purchaseMinor = $priceMinor === null ? null : $packs * $priceMinor;
+
+        return [
+            'material_id' => $material->id,
+            'name' => $material->name,
+            'kind' => $material->kind,
+            'unit' => $unit,
+            'quantity' => round($quantity, 3),
+            'packs' => $packs,
+            'pack_size' => $packSize,
+            'pack_price_minor' => $priceMinor,
+            'remaining_quantity' => round(max(0, $packs * $packSize - $quantity), 3),
+            'consumed_minor' => $consumedMinor,
+            'purchase_minor' => $purchaseMinor,
         ];
     }
 
@@ -108,30 +238,26 @@ class ProjectManufacturingReport
                 $part->width,
                 $part->thickness,
             ]))
-            ->map(function (Collection $group) use ($settings): array {
-                $firstPart = $group->first();
-                $pieces = $group->flatMap(function (PartDefinition $part): array {
-                    return collect(range(1, $part->instances->count()))
-                        ->map(fn (int $piece): array => [
-                            'part_id' => $part->id,
-                            'name' => $part->name,
-                            'piece' => $piece,
-                            'length' => $part->length,
-                        ])
-                        ->all();
-                })->sortByDesc('length')->values();
-                [$bars, $oversized] = $this->packLinearPieces($pieces->all(), $settings);
-
-                return [
-                    'material' => $firstPart->material ?: 'Не указан',
-                    'section' => ['width' => $firstPart->width, 'thickness' => $firstPart->thickness],
-                    'stock_length' => $settings['stock_length'],
-                    'bars' => $bars,
-                    'oversized' => $oversized,
-                ];
-            })
+            ->map(fn (Collection $group): array => $this->linearMap($group, $settings, $group->first()->material ?: 'Не указан'))
             ->values()
             ->all();
+    }
+
+    private function linearMap(Collection $group, array $settings, string $material): array
+    {
+        $firstPart = $group->first();
+        $pieces = $group->flatMap(fn (PartDefinition $part): array => collect(range(1, $part->instances->count()))
+            ->map(fn (int $piece): array => ['part_id' => $part->id, 'name' => $part->name, 'piece' => $piece, 'length' => $part->length])
+            ->all())->sortByDesc('length')->values();
+        [$bars, $oversized] = $this->packLinearPieces($pieces->all(), $settings);
+
+        return [
+            'material' => $material,
+            'section' => ['width' => $firstPart->width, 'thickness' => $firstPart->thickness],
+            'stock_length' => $settings['stock_length'],
+            'bars' => $bars,
+            'oversized' => $oversized,
+        ];
     }
 
     /**
@@ -181,32 +307,31 @@ class ProjectManufacturingReport
     {
         return $parts
             ->groupBy(fn (PartDefinition $part): string => implode('|', [$part->material ?: 'Не указан', $part->thickness]))
-            ->map(function (Collection $group) use ($settings): array {
-                $firstPart = $group->first();
-                $pieces = $group->flatMap(function (PartDefinition $part): array {
-                    return collect(range(1, $part->instances->count()))
-                        ->map(fn (int $piece): array => [
-                            'part_id' => $part->id,
-                            'name' => $part->name,
-                            'piece' => $piece,
-                            'length' => $part->grain_axis === 'width' ? $part->width : $part->length,
-                            'width' => $part->grain_axis === 'width' ? $part->length : $part->width,
-                            'rotated' => $part->grain_axis === 'width',
-                        ])
-                        ->all();
-                })->sortByDesc(fn (array $piece): float => $piece['length'] * $piece['width'])->values();
-                [$sheets, $oversized] = $this->packSheetPieces($pieces->all(), $settings);
-
-                return [
-                    'material' => $firstPart->material ?: 'Не указан',
-                    'thickness' => $firstPart->thickness,
-                    'stock' => ['length' => $settings['sheet_length'], 'width' => $settings['sheet_width']],
-                    'sheets' => $sheets,
-                    'oversized' => $oversized,
-                ];
-            })
+            ->map(fn (Collection $group): array => $this->sheetMap($group, $settings, $group->first()->material ?: 'Не указан'))
             ->values()
             ->all();
+    }
+
+    private function sheetMap(Collection $group, array $settings, string $material): array
+    {
+        $pieces = $group->flatMap(fn (PartDefinition $part): array => collect(range(1, $part->instances->count()))
+            ->map(fn (int $piece): array => [
+                'part_id' => $part->id,
+                'name' => $part->name,
+                'piece' => $piece,
+                'length' => $part->grain_axis === 'width' ? $part->width : $part->length,
+                'width' => $part->grain_axis === 'width' ? $part->length : $part->width,
+                'rotated' => $part->grain_axis === 'width',
+            ])->all())->sortByDesc(fn (array $piece): float => $piece['length'] * $piece['width'])->values();
+        [$sheets, $oversized] = $this->packSheetPieces($pieces->all(), $settings);
+
+        return [
+            'material' => $material,
+            'thickness' => $group->first()->thickness,
+            'stock' => ['length' => $settings['sheet_length'], 'width' => $settings['sheet_width']],
+            'sheets' => $sheets,
+            'oversized' => $oversized,
+        ];
     }
 
     /**
@@ -250,6 +375,13 @@ class ProjectManufacturingReport
 
         foreach ($sheets as &$sheet) {
             $usedArea = collect($sheet['placements'])->sum(fn (array $piece): float => $piece['length'] * $piece['width']);
+            $right = $settings['sheet_length'] - $settings['margin'];
+            $bottom = $settings['sheet_width'] - $settings['margin'];
+            $lastShelf = end($sheet['shelves']);
+            $below = max(0, $bottom - $lastShelf['y'] - $lastShelf['height'] - $settings['kerf']);
+            $sheet['reusable_area'] = round($below * ($right - $settings['margin']) + collect($sheet['shelves'])->sum(
+                fn (array $shelf): float => max(0, $right - $shelf['x']) * $shelf['height'],
+            ), 2);
             unset($sheet['shelves']);
             $sheet['used_area'] = round($usedArea, 2);
             $sheet['waste_area'] = round($settings['sheet_length'] * $settings['sheet_width'] - $usedArea, 2);
