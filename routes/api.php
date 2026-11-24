@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\CapabilityController;
 use App\Http\Controllers\Api\V1\CatalogMaterialController;
 use App\Http\Controllers\Api\V1\ProjectAnalysisController;
 use App\Http\Controllers\Api\V1\ProjectCommandController;
+use App\Http\Controllers\Api\V1\ProjectFastenerController;
 use App\Http\Controllers\Api\V1\ProjectMaterialsController;
 use App\Http\Controllers\Api\V1\ProjectSnapshotController;
 use App\Http\Controllers\Api\V1\ProjectValidationController;
@@ -90,6 +91,18 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
     Route::scopeBindings()->middleware('token.project')->group(function (): void {
         Route::get('/projects/{project}', ProjectSnapshotController::class)
             ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/fasteners', [ProjectFastenerController::class, 'index'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::post('/projects/{project}/fasteners', [ProjectFastenerController::class, 'store'])
+            ->middleware('abilities:projects:write');
+        Route::post('/projects/{project}/fasteners/drilling', [ProjectFastenerController::class, 'drill'])
+            ->middleware('abilities:projects:write');
+        Route::post('/projects/{project}/fasteners/copy', [ProjectFastenerController::class, 'copy'])
+            ->middleware('abilities:projects:write');
+        Route::put('/projects/{project}/fasteners/{projectFastener}', [ProjectFastenerController::class, 'update'])
+            ->middleware('abilities:projects:write');
+        Route::delete('/projects/{project}/fasteners', [ProjectFastenerController::class, 'destroy'])
+            ->middleware('abilities:projects:write');
         Route::patch('/projects/{project}', [ProjectController::class, 'update'])
             ->middleware('abilities:projects:write');
         Route::delete('/projects/{project}', [ProjectController::class, 'destroy'])
@@ -130,6 +143,8 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
             ->middleware('abilities:projects:write');
         Route::post('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'generateMachining'])
             ->middleware('abilities:projects:write');
+        Route::get('/projects/{project}/connections/{projectConnection}/machining/preview', [ProjectConnectionController::class, 'previewMachining'])
+            ->middleware('ability:projects:read,projects:write');
         Route::delete('/projects/{project}/connections/{projectConnection}/machining', [ProjectConnectionController::class, 'removeMachining'])
             ->middleware('abilities:projects:write');
         Route::delete('/projects/{project}/connections/{projectConnection}', [ProjectConnectionController::class, 'destroy'])

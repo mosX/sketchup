@@ -165,6 +165,7 @@
                         <button v-for="group in assemblyBreadcrumbItems" :key="group.id" class="view-tab" :class="{ 'view-tab-active': group.id === activeAssemblyGroupId }" type="button" @click="openAssemblyGroup(group.id)">› {{ group.name }}</button>
                         <span v-if="isolatedGroup" class="ml-2 self-center rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold text-amber-700">Solo: {{ isolatedGroup.name }}</span>
                         <div class="ml-auto flex items-center gap-2 px-2">
+                            <button class="view-tab disabled:opacity-50" :class="{ 'view-tab-active': fastenerTool.active }" type="button" :aria-pressed="fastenerTool.active" :disabled="explodeDistance > 0" @click="toggleFastenerTool">Крепёж</button>
                             <button v-if="diagnosticFocusInstanceIds.length" class="view-tab view-tab-active" type="button" title="Вернуть отображение всей сборки" @click="clearDiagnosticFocus">Сбросить фокус</button>
                             <button class="view-tab" :class="{ 'view-tab-active': measurementTool === 'distance' }" type="button" @click="toggleMeasurement('distance')">Рулетка</button>
                             <button class="view-tab" :class="{ 'view-tab-active': measurementTool === 'angle' }" type="button" @click="toggleMeasurement('angle')">Угол</button>
@@ -215,7 +216,7 @@
 
                 <ThreeViewport
                     :mode="editorMode"
-                    :parts="projects.parts"
+                    :parts="connectionViewportParts"
                     :active-part="partPreview"
                     :part-context-instance="partContextInstance"
                     :part-context-visible-instance-ids="partContextVisibleInstanceIds"
@@ -223,7 +224,7 @@
                     :selected-group-instance-ids="groupMoveInstanceIds"
                     :group-move-instance-ids="groupMoveInstanceIds"
                     :group-move-block="groupMoveBlock"
-                    :transform-busy="saveState === 'saving' || historyBusy"
+                    :transform-busy="saveState === 'saving' || historyBusy || Boolean(activeConnectionPreview) || fastenerTool.active"
                     :commit-scale="commitScale"
                     :pickable-instance-ids="assemblyPickableInstanceIds"
                     :selected-operation-id="selectedOperationId"
@@ -233,6 +234,7 @@
                     :explode-distance="explodeDistance"
                     :focused-instance-ids="viewportFocusedInstanceIds"
                     :focus-request-id="diagnosticFocusRequestId"
+                    :focused-fasteners="diagnosticFastenerFocus"
                     :measurement-tool="measurementTool"
                     :measurement-reset-id="measurementResetId"
                     :section-axis="sectionAxis"
@@ -240,9 +242,21 @@
                     :section-inverted="sectionInverted"
                     :connections="projects.connections"
                     :selected-connection-id="selectedConnectionId"
+                    :connection-machining-preview="activeConnectionPreview"
+                    :fasteners="fastenerTool.items"
+                    :fastener-preview="fastenerTool.preview"
+                    :assembly-geometry-cache="assemblyGeometryCache"
+                    :fastener-machining-preview="fastenerTool.drillPreview"
+                    :fastener-mode="fastenerTool.active"
+                    :fastener-row-copy="Boolean(fastenerTool.copyDraft)"
+                    :selected-fastener-id="fastenerTool.active ? fastenerTool.editingId : null"
+                    @pick-fastener-point="fastenerTool.pick"
+                    @select-fastener="fastenerTool.edit"
+                    @fastener-preview-rendered="fastenerTool.finishDrillPreview"
                     @select-instance="selectAssemblyPick"
                     @open-instance-group="openAssemblyPick"
                     @select-connection="selectConnection"
+                    @connection-preview-rendered="finishConnectionMachiningPreview"
                     @update-connection-parameters="updateConnectionParametersFromScene"
                     @commit-connection-parameters="commitConnectionParametersFromScene"
                     @select-operation="selectedOperationId = $event"
@@ -261,7 +275,8 @@
             </main>
 
             <aside class="inspector-panel" aria-label="Свойства выделения">
-                <template v-if="editorMode === 'part' && partDraft">
+                <FastenerPanel v-if="editorMode === 'assembly' && fastenerTool.active" :tool="fastenerTool" :instances="allAssemblyInstances"/>
+                <template v-else-if="editorMode === 'part' && partDraft">
                     <div class="inspector-section inspector-context">
                         <span class="inspector-kicker">Заготовка</span>
                         <h2 class="inspector-name truncate" :title="partDraft.name">{{ partDraft.name }}</h2>
@@ -493,6 +508,9 @@
                                 <input :checked="selectedOperation.through" type="checkbox" @change="setDrillThrough($event.target.checked)">
                                 Сквозное отверстие
                             </label>
+                            <label v-if="selectedOperation.bottom_diameter != null" class="editor-field mt-2">Диаметр на дне, мм
+                                <input v-scrub-number :value="selectedOperation.bottom_diameter" type="number" min="0.1" :max="selectedOperation.diameter - 0.01" step="0.01" @change="setDrillBottomDiameter($event.target.value)">
+                            </label>
                         </template>
                         <details v-if="operationHelp[selectedOperation.type]" :key="selectedOperation.type" class="inspector-operation-help">
                             <summary>Подсказка по инструменту</summary>
@@ -555,10 +573,10 @@
                         <dl class="mt-3 grid gap-2 text-xs">
                             <div v-for="(value, key) in connectionSummaryParameters" :key="key" class="flex items-center justify-between gap-3 rounded-lg bg-stone-50 px-3 py-2"><dt class="text-stone-400">{{ connectionParameterLabel(key) }}</dt><dd class="font-mono font-semibold text-stone-700">{{ connectionParameterValue(key, value) }}</dd></div>
                         </dl>
-                        <div v-if="selectedConnection.type !== 'butt'" class="mt-4 grid gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                        <fieldset v-if="selectedConnection.type !== 'butt'" :disabled="connectionSaving" class="mt-4 grid min-w-0 gap-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
                             <div class="flex items-center justify-between gap-3"><strong class="text-xs text-emerald-900">Положение на гранях</strong><span class="text-[10px] text-emerald-700">Перетаскивайте ◆ на сцене</span></div>
                             <div v-for="role in ['primary', 'secondary']" :key="role" class="grid grid-cols-2 gap-2">
-                                <div class="col-span-2 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wide text-stone-400"><span>{{ role === 'primary' ? 'Первая деталь' : 'Вторая деталь' }}</span><button class="text-emerald-700 hover:text-emerald-900" type="button" @click="centerConnectionOnFace(role)">По центру</button></div>
+                                <div class="col-span-2 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wide text-stone-400"><span>{{ selectedConnection.type === 'mortise_tenon' ? (role === 'primary' ? 'Шип' : 'Паз') : (role === 'primary' ? 'Первая деталь' : 'Вторая деталь') }}</span><button class="text-emerald-700 hover:text-emerald-900" type="button" @click="centerConnectionOnFace(role)">По центру</button></div>
                                 <label class="dimension-field"><span>U, мм</span><input v-scrub-number :value="connectionCenterValue(role, 'u')" type="number" min="0" :max="connectionSurfaceSize(role).u" step="0.1" @change="setConnectionCenter(role, 'u', $event.target.value)"></label>
                                 <label class="dimension-field"><span>V, мм</span><input v-scrub-number :value="connectionCenterValue(role, 'v')" type="number" min="0" :max="connectionSurfaceSize(role).v" step="0.1" @change="setConnectionCenter(role, 'v', $event.target.value)"></label>
                             </div>
@@ -567,7 +585,14 @@
                             </label>
                             <div v-if="selectedConnection.type === 'half_lap'" class="grid grid-cols-2 gap-2"><label class="dimension-field"><span>Длина зоны</span><input v-scrub-number :value="selectedConnection.parameters.joint_length ?? defaultConnectionArea.length" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_length', $event.target.value)"></label><label class="dimension-field"><span>Ширина зоны</span><input v-scrub-number :value="selectedConnection.parameters.joint_width ?? defaultConnectionArea.width" type="number" min="0.1" step="0.1" @change="setConnectionParameter('joint_width', $event.target.value)"></label></div>
                             <label v-if="selectedConnection.type === 'dowel'" class="editor-field">Шаг между шкантами, мм<input v-scrub-number :value="selectedConnection.parameters.dowel_spacing ?? Number(selectedConnection.parameters.dowel_diameter ?? 8) * 2" type="number" min="0.1" step="0.1" @change="setConnectionParameter('dowel_spacing', $event.target.value)"></label>
-                        </div>
+                            <p v-if="selectedConnection.type === 'mortise_tenon'" class="text-xs font-semibold text-emerald-900">Размеры шипа</p>
+                            <div v-if="selectedConnection.type === 'mortise_tenon'" class="grid grid-cols-3 gap-2">
+                                <label v-for="field in tenonDimensionFields" :key="field.key" class="dimension-field">
+                                    <span>{{ field.label }}, мм</span>
+                                    <input v-scrub-number :value="selectedConnection.parameters[field.key] ?? field.fallback" type="number" min="0.1" max="10000" step="0.1" @change="setConnectionParameter(field.key, $event.target.value)">
+                                </label>
+                            </div>
+                        </fieldset>
                         <div class="mt-4 rounded-xl border border-stone-200 bg-stone-50 p-3">
                             <div class="flex items-center justify-between gap-3">
                                 <span class="text-xs font-semibold text-stone-600">Обработка деталей</span>
@@ -576,7 +601,18 @@
                             <p class="mt-2 text-xs leading-5 text-stone-400">{{ connectionMachiningDescription(selectedConnection) }}</p>
                             <p v-if="selectedConnection.generated_operations?.length" class="mt-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-600">Создано операций: {{ selectedConnection.generated_operations.length }}</p>
                             <p v-if="connectionError" class="mt-2 text-xs text-red-600">{{ connectionError }}</p>
-                            <button v-if="['pending', 'outdated'].includes(selectedConnection.machining_status)" class="button-primary mt-3 w-full" type="button" :disabled="connectionSaving" @click="generateSelectedConnectionMachining">{{ connectionSaving ? 'Создаём обработку…' : selectedConnection.machining_status === 'outdated' ? 'Пересчитать обработку' : selectedConnection.type === 'butt' ? 'Подтвердить без обработки' : 'Создать обработку заготовок' }}</button>
+                            <template v-if="['pending', 'outdated'].includes(selectedConnection.machining_status) && selectedConnection.type === 'mortise_tenon'">
+                                <div v-if="activeConnectionPreview" class="mt-2 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-950">
+                                    <p class="font-semibold">{{ connectionPreviewReady ? 'Предпросмотр шипа и паза' : 'Строим геометрию…' }}</p>
+                                    <p v-if="connectionPreviewReady" class="mt-1">Красным отмечена выборка. Применение обновит обе заготовки.</p>
+                                </div>
+                                <button v-if="!activeConnectionPreview" class="button-primary mt-3 w-full" type="button" :disabled="connectionSaving" @click="previewSelectedConnectionMachining">{{ connectionSaving ? 'Рассчитываем…' : 'Предпросмотр' }}</button>
+                                <template v-else>
+                                    <button class="button-primary mt-3 w-full" type="button" :disabled="connectionSaving || !connectionPreviewReady" @click="generateSelectedConnectionMachining">Применить к обеим деталям</button>
+                                    <button class="button-secondary mt-2 w-full" type="button" :disabled="connectionSaving" @click="connectionPreview = null">Закрыть предпросмотр</button>
+                                </template>
+                            </template>
+                            <button v-else-if="['pending', 'outdated'].includes(selectedConnection.machining_status)" class="button-primary mt-3 w-full" type="button" :disabled="connectionSaving" @click="generateSelectedConnectionMachining">{{ connectionSaving ? 'Создаём обработку…' : selectedConnection.machining_status === 'outdated' ? 'Пересчитать обработку' : selectedConnection.type === 'butt' ? 'Подтвердить без обработки' : 'Создать обработку заготовок' }}</button>
                             <button v-if="selectedConnection.machining_status !== 'pending'" class="button-secondary mt-2 w-full" type="button" :disabled="connectionSaving" @click="removeSelectedConnectionMachining">Отменить созданную обработку</button>
                         </div>
                         <button class="danger-button mt-5 w-full" type="button" @click="removeSelectedConnection">Удалить соединение</button>
@@ -779,6 +815,7 @@
                         <p class="mt-2 text-sm leading-6 text-stone-500">Предварительная проверка конструкции и расчёт материала по текущей сборке.</p>
                     </div>
                     <div class="flex items-center gap-2">
+                        <button v-if="projectAnalysis" :disabled="projectAnalysisLoading || Boolean(projectAnalysisError)" class="button-secondary button-compact" type="button" @click="printWorkshopPlan">Карты деталей · PDF</button>
                         <button v-if="projectAnalysis" class="button-secondary button-compact" type="button" @click="exportManufacturingCsv">Скачать CSV</button>
                         <button class="icon-button" type="button" aria-label="Закрыть" @click="showProjectAnalysis = false">×</button>
                     </div>
@@ -835,6 +872,13 @@
                         <p v-else class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">Критичных замечаний в предварительной проверке нет.</p>
                     </section>
 
+                    <FastenerDiagnosticsPanel
+                        :report="fastenerAnalysis"
+                        :loading="fastenerAnalysisLoading"
+                        :error="fastenerAnalysisError"
+                        @inspect="inspectAnalysisIssue"
+                    />
+
                     <section class="mt-7">
                         <h3 class="text-base font-semibold text-stone-800">Спецификация деталей</h3>
                         <div class="mt-3 overflow-x-auto rounded-xl border border-stone-200">
@@ -842,7 +886,7 @@
                                 <thead class="bg-stone-50 text-stone-400"><tr><th class="px-3 py-2.5">Заготовка</th><th class="px-3 py-2.5">Материал</th><th class="px-3 py-2.5">Размеры, мм</th><th class="px-3 py-2.5">Кол-во</th><th class="px-3 py-2.5">Операций</th></tr></thead>
                                 <tbody class="divide-y divide-stone-100 text-stone-600">
                                     <tr v-for="part in projectAnalysis.manufacturing.bill_of_materials" :key="part.part_id">
-                                        <td class="px-3 py-2.5 font-semibold text-stone-700">{{ part.name }}</td>
+                                        <td class="px-3 py-2.5 font-semibold text-stone-700"><span class="mr-2 text-emerald-800">{{ partWorkshopCode(part.part_id) }}</span>{{ part.name }}</td>
                                         <td class="px-3 py-2.5">{{ part.material }}</td>
                                         <td class="px-3 py-2.5 font-mono">{{ part.dimensions.length }} × {{ part.dimensions.width }} × {{ part.dimensions.thickness }}</td>
                                         <td class="px-3 py-2.5">×{{ part.quantity }}</td>
@@ -854,21 +898,8 @@
                     </section>
 
                     <section v-if="projectAnalysis.manufacturing.linear_cutting.length" class="mt-7">
-                        <h3 class="text-base font-semibold text-stone-800">Раскрой погонажа</h3>
-                        <div class="mt-3 grid gap-4">
-                            <article v-for="(cutting, cuttingIndex) in projectAnalysis.manufacturing.linear_cutting" :key="`linear-${cuttingIndex}`" class="rounded-xl border border-stone-200 p-4">
-                                <div class="flex flex-wrap items-center justify-between gap-2"><strong class="text-sm text-stone-700">{{ cutting.material }} · {{ cutting.section.width }} × {{ cutting.section.thickness }} мм</strong><span class="text-xs text-stone-400">Хлыст {{ cutting.stock_length }} мм · {{ cutting.bars.length }} шт.</span></div>
-                                <div class="mt-3 grid gap-2">
-                                    <div v-for="bar in cutting.bars" :key="bar.number" class="rounded-lg bg-stone-50 p-3">
-                                        <div class="flex items-center justify-between gap-3 text-[11px]"><b class="text-stone-600">Хлыст №{{ bar.number }}</b><span class="text-stone-400">Остаток {{ bar.waste_length }} мм</span></div>
-                                        <div class="mt-2 flex h-8 overflow-hidden rounded-md border border-stone-200 bg-white">
-                                            <div v-for="cut in bar.cuts" :key="`${cut.part_id}-${cut.piece}`" class="grid min-w-8 place-items-center border-r border-white bg-emerald-600 px-1 text-[9px] font-semibold text-white" :style="{ width: `${cut.length / cutting.stock_length * 100}%` }" :title="`${cut.name}: ${cut.length} мм`">{{ cut.length }}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <p v-if="cutting.oversized.length" class="mt-3 text-xs text-red-600">Не помещаются в стандартный хлыст: {{ cutting.oversized.map((part) => part.name).join(', ') }}</p>
-                            </article>
-                        </div>
+                        <h3 class="text-base font-semibold text-stone-800">Раскрой досок</h3>
+                        <BoardCuttingDiagram :groups="projectAnalysis.manufacturing.linear_cutting" class="mt-3"/>
                     </section>
 
                     <section v-if="projectAnalysis.manufacturing.sheet_cutting.length" class="mt-7">
@@ -879,7 +910,7 @@
                                 <div v-for="sheet in cutting.sheets" :key="sheet.number" class="mt-3">
                                     <div class="mb-1 flex items-center justify-between gap-2 text-[11px] text-stone-400"><span>Лист №{{ sheet.number }}</span><span>Пригодный остаток {{ formatAnalysisArea(sheet.reusable_area) }} м²</span></div>
                                     <div class="relative aspect-[2/1] overflow-hidden rounded-lg border-2 border-stone-300 bg-stone-50">
-                                        <div v-for="placement in sheet.placements" :key="`${placement.part_id}-${placement.piece}`" class="absolute overflow-hidden border border-emerald-800 bg-emerald-200/80 p-1 text-[8px] font-semibold leading-tight text-emerald-900" :style="sheetPlacementStyle(placement, cutting.stock)" :title="`${placement.name}: ${placement.length} × ${placement.width} мм`">{{ placement.name }}</div>
+                                        <div v-for="placement in sheet.placements" :key="`${placement.part_id}-${placement.piece}`" class="absolute overflow-hidden border border-emerald-800 bg-emerald-200/80 p-1 text-[8px] font-semibold leading-tight text-emerald-900" :style="sheetPlacementStyle(placement, cutting.stock)" :title="`${placement.name}: ${placement.length} × ${placement.width} мм`">{{ partWorkshopCode(placement.part_id) }}</div>
                                     </div>
                                 </div>
                                 <p v-if="cutting.oversized.length" class="mt-3 text-xs text-red-600">Не помещаются на стандартный лист: {{ cutting.oversized.map((part) => part.name).join(', ') }}</p>
@@ -891,6 +922,15 @@
                 </template>
             </section>
         </div>
+        <Teleport v-if="workshopPrintReport" to="body">
+            <WorkshopPrint
+                :project-name="projectName"
+                :revision="workshopPrintReport.revision"
+                :parts="projects.parts"
+                :groups="projects.assemblyGroups"
+                :report="workshopPrintReport.manufacturing"
+            />
+        </Teleport>
     </div>
 </template>
 
@@ -902,6 +942,16 @@ import ThreeViewport from '../components/ThreeViewport.vue';
 import ProjectScriptDialog from '../components/ProjectScriptDialog.vue';
 import ProjectVersionsDialog from '../components/ProjectVersionsDialog.vue';
 import ProjectMaterialsPanel from '../components/ProjectMaterialsPanel.vue';
+import FastenerPanel from '../components/FastenerPanel.vue';
+import FastenerDiagnosticsPanel from '../components/FastenerDiagnosticsPanel.vue';
+import { analyzeFasteners } from '../editor/fastenerDiagnostics.js';
+import { createFastenerGeometry } from '../editor/fastenerGeometry.js';
+import { createResultCache } from '../editor/geometry/resultCache.js';
+import { useProjectFasteners } from '../editor/useProjectFasteners.js';
+import BoardCuttingDiagram from '../components/BoardCuttingDiagram.vue';
+import WorkshopPrint from '../components/WorkshopPrint.vue';
+import { partWorkshopCode } from '../editor/workshopPlan.js';
+import { connectionMachiningPreviewParts } from '../editor/connections.js';
 import AssemblyPlacementPanel from '../components/AssemblyPlacementPanel.vue';
 import InspectorAction from '../components/InspectorAction.vue';
 import { usePartDraftRecovery } from '../editor/usePartDraftRecovery.js';
@@ -977,6 +1027,7 @@ const ghostedInstanceIds = ref([]);
 const explodeDistance = ref(0);
 const diagnosticFocusInstanceIds = ref([]);
 const diagnosticFocusRequestId = ref(0);
+const diagnosticFastenerFocus = ref(null);
 const measurementTool = ref(null);
 const measurementResetId = ref(0);
 const sectionAxis = ref(null);
@@ -997,12 +1048,20 @@ const showVersions = ref(false);
 const creatingPart = ref(false);
 const createError = ref('');
 const showProjectAnalysis = ref(false);
+const workshopPrintReport = ref(null);
 const analysisPartId = ref(null);
 const showTemplateCreator = ref(false);
 const templateSaving = ref(false);
 const templateError = ref('');
 const templateDraft = reactive({ name: '', description: '' });
 const connectionSaving = ref(false);
+const connectionPreview = ref(null);
+const connectionPreviewReady = ref(false);
+const tenonDimensionFields = [
+    { key: 'tenon_width', label: 'Ширина', fallback: 30 },
+    { key: 'tenon_thickness', label: 'Толщина', fallback: 10 },
+    { key: 'tenon_length', label: 'Длина', fallback: 20 },
+];
 const connectionError = ref('');
 const connectionDraft = reactive({
     secondary_instance_id: null,
@@ -1039,6 +1098,8 @@ const connectionFaceLabels = {
 const projectAnalysis = ref(null);
 const projectAnalysisLoading = ref(false);
 const projectAnalysisError = ref('');
+const fastenerAnalysisLoading = ref(false);
+const fastenerAnalysisError = ref('');
 const cuttingSettings = reactive({
     kerf_mm: 3.2,
     edge_margin_mm: 10,
@@ -1081,6 +1142,19 @@ const {
     undo: undoHistory,
     undoLabel,
 } = useEditorHistory();
+const assemblyGeometryCache = createResultCache();
+const fastenerGeometry = createFastenerGeometry(assemblyGeometryCache);
+const fastenerTool = reactive(useProjectFasteners(
+    projectId, () => projects.parts, recordHistory, () => projects.fetchParts(projectId), () => viewportVisibleInstanceIds.value, fastenerGeometry,
+));
+const fastenerAnalysisPlan = computed(() => showProjectAnalysis.value
+    ? fastenerGeometry.evaluate(materialFor => analyzeFasteners(fastenerTool.items, projects.parts, projects.assemblyGroups, materialFor))
+    : null);
+const fastenerAnalysis = computed(() => fastenerAnalysisPlan.value?.result);
+watch(() => fastenerAnalysisPlan.value?.needed, needed => {
+    if (needed) fastenerGeometry.prepare(needed);
+});
+watch(() => projects.parts.map(part => part.id), fastenerGeometry.retain);
 const { applyScript } = useProjectScripts({
     projectId, projects, recordHistory,
     onApplied: async () => {
@@ -1124,6 +1198,24 @@ watch(activePart, (part) => {
 const selectedPart = computed(() => projects.parts.find((part) => part.instances?.some((instance) => instance.id === selectedInstanceId.value)) ?? null);
 const selectedInstance = computed(() => selectedPart.value?.instances.find((instance) => instance.id === selectedInstanceId.value) ?? null);
 const selectedConnection = computed(() => projects.connections.find((connection) => connection.id === selectedConnectionId.value) ?? null);
+const activeConnectionPreview = computed(() => editorMode.value === 'assembly'
+    && selectedConnection.value?.id === connectionPreview.value?.connectionId
+    ? connectionPreview.value
+    : null);
+const connectionViewportParts = computed(() => connectionMachiningPreviewParts(projects.parts, activeConnectionPreview.value ?? fastenerTool.drillPreview));
+watch(() => fastenerTool.drillPreview, async (plan, previous) => {
+    if (plan) {
+        setDiagnosticFocus(plan.parts.map(part => part.instance_id));
+        await nextTick();
+        diagnosticFocusRequestId.value++;
+    } else if (previous && !diagnosticFastenerFocus.value) {
+        clearDiagnosticFocus();
+    }
+});
+watch([editorMode, selectedConnectionId, () => selectedConnection.value?.parameters], () => {
+    connectionPreview.value = null;
+}, { deep: true });
+watch(selectedConnectionId, () => { connectionError.value = ''; });
 const libraryVisible = ref(window.innerWidth > 900);
 const inspectorVisible = ref(window.innerWidth > 900);
 const toggleWorkspacePanel = (panel) => {
@@ -1145,6 +1237,9 @@ const connectionSummaryParameters = computed(() => Object.fromEntries(Object.ent
     'joint_length',
     'joint_width',
     'dowel_spacing',
+    'tenon_width',
+    'tenon_thickness',
+    'tenon_length',
 ].includes(key))));
 const allAssemblyInstances = computed(() => projects.parts.flatMap((part) => (part.instances ?? []).map((instance) => ({
     ...instance,
@@ -1396,6 +1491,7 @@ const redoEditor = async () => {
 };
 
 onMounted(async () => {
+    void fastenerTool.reload().catch(() => {});
     try {
         const [project, parts] = await Promise.all([
             projects.fetchProject(projectId),
@@ -1471,7 +1567,9 @@ const reloadRestoredProject = async () => {
     isolatedGroupId.value = null;
     explodeDistance.value = 0;
     clearHistory();
-    await Promise.all([projects.fetchProject(projectId), projects.fetchParts(projectId), projects.fetchAssemblyGroups(projectId), projects.fetchProjectConnections(projectId)]);
+    fastenerTool.clear();
+    fastenerTool.close();
+    await Promise.all([projects.fetchProject(projectId), projects.fetchParts(projectId), projects.fetchAssemblyGroups(projectId), projects.fetchProjectConnections(projectId), fastenerTool.reload()]);
     projectName.value = projects.activeProject.name;
     projectDescription.value = projects.activeProject.description ?? '';
     editorMode.value = 'assembly';
@@ -1653,8 +1751,15 @@ const setDrillDiameter = (value) => {
     if (selectedOperation.value?.type !== 'drill') return;
 
     const surface = grooveSurfaceDimensions(selectedOperation.value.face);
-    selectedOperation.value.diameter = Math.min(Math.max(Number(value), 0.1), surface.u, surface.v);
+    const minimum = selectedOperation.value.bottom_diameter == null ? 0.1 : Math.min(Number(selectedOperation.value.bottom_diameter) + 0.01, surface.u, surface.v);
+    selectedOperation.value.diameter = Math.min(Math.max(Number(value), minimum), surface.u, surface.v);
     fitDrillCenter();
+};
+
+const setDrillBottomDiameter = (value) => {
+    if (selectedOperation.value?.type !== 'drill') return;
+
+    selectedOperation.value.bottom_diameter = Math.max(0.1, Math.min(Number(value), selectedOperation.value.diameter - 0.01));
 };
 
 const setDrillDepth = (value) => {
@@ -1725,6 +1830,7 @@ const savePart = async () => {
 
     try {
         const appliedOperations = partDraft.value.operations.map((operation) => ({ ...operation, status: 'applied' }));
+        const dimensionsChanged = stockDimensionFields.some(({ key }) => Number(partDraft.value.dimensions[key]) !== Number(activePart.value.dimensions[key]));
         const updated = await projects.updatePart(projectId, activePart.value.id, {
             name: partDraft.value.name,
             material: partDraft.value.material || null,
@@ -1737,6 +1843,7 @@ const savePart = async () => {
         selectedOperationId.value = null;
         historyExpanded.value = false;
         await resetPartHistoryBaseline();
+        if (dimensionsChanged) await projects.fetchProjectConnections(projectId);
         saveState.value = 'applied';
     } catch {
         saveState.value = 'error';
@@ -1828,7 +1935,9 @@ const connectionMachiningStatusLabel = (status) => ({
 const connectionMachiningDescription = (connection) => {
     if (connection.machining_status === 'generated') return 'Операции добавлены в историю обеих заготовок и уже влияют на их геометрию.';
     if (connection.machining_status === 'not_required') return 'Стыковое соединение не требует автоматической выборки материала.';
-    if (connection.machining_status === 'outdated') return 'Положение изменено. Старая обработка пока сохранена, а красным показан результат после пересчёта.';
+    if (connection.machining_status === 'outdated') return connection.type === 'mortise_tenon'
+        ? 'Размер заготовки или параметры соединения изменились. Откройте предпросмотр новой обработки.'
+        : 'Положение изменено. Старая обработка пока сохранена, а красным показана новая выборка.';
     if (connection.type === 'butt') return 'Для стыкового соединения геометрия деталей останется без изменений.';
 
     return 'Система добавит применённые операции на обе детали. Общие заготовки при необходимости станут отдельными вариантами.';
@@ -1866,7 +1975,7 @@ const selectConnection = async (connectionId) => {
     selectedInstanceId.value = null;
     selectedGroupId.value = null;
     assemblyGuideActive.value = false;
-    diagnosticFocusInstanceIds.value = [connection.primary_instance_id, connection.secondary_instance_id];
+    setDiagnosticFocus([connection.primary_instance_id, connection.secondary_instance_id]);
     await nextTick();
     diagnosticFocusRequestId.value++;
 };
@@ -1969,32 +2078,81 @@ const centerConnectionOnFace = (role) => {
 const updateConnectionParametersFromScene = (connectionId, parameters) => {
     const connection = projects.connections.find((item) => item.id === connectionId);
 
-    if (!connection) return;
+    if (!connection || connectionSaving.value) return;
 
     connection.parameters = { ...connection.parameters, ...parameters };
 };
 const commitConnectionParametersFromScene = (connectionId) => {
-    if (selectedConnection.value?.id === connectionId) saveSelectedConnectionParameters();
+    if (!connectionSaving.value && selectedConnection.value?.id === connectionId) saveSelectedConnectionParameters();
+};
+
+const previewSelectedConnectionMachining = async () => {
+    const connection = selectedConnection.value;
+    if (!connection || connectionSaving.value) return;
+
+    connectionSaving.value = true;
+    connectionError.value = '';
+    connectionPreview.value = null;
+
+    try {
+        const preview = await projects.previewProjectConnectionMachining(projectId, connection.id);
+        if (selectedConnection.value !== connection || editorMode.value !== 'assembly') return;
+        connectionPreviewReady.value = false;
+        connectionPreview.value = { ...preview, connectionId: connection.id };
+        setDiagnosticFocus([connection.primary_instance_id, connection.secondary_instance_id]);
+        await nextTick();
+        diagnosticFocusRequestId.value++;
+    } catch (error) {
+        if (selectedConnection.value !== connection || editorMode.value !== 'assembly') return;
+        const errors = error.response?.data?.errors ?? {};
+        connectionError.value = Object.values(errors)[0]?.[0] ?? 'Не удалось рассчитать предпросмотр.';
+        const role = ['primary', 'secondary'].find(item => errors[`parameters.${item}`]);
+        if (role) {
+            setDiagnosticFocus([connection[`${role}_instance_id`]]);
+            await nextTick();
+            diagnosticFocusRequestId.value++;
+        }
+    } finally {
+        connectionSaving.value = false;
+    }
+};
+
+const finishConnectionMachiningPreview = (preview, success) => {
+    if (preview !== activeConnectionPreview.value) return;
+    connectionPreviewReady.value = success;
+    if (!success) {
+        connectionPreview.value = null;
+        connectionError.value = 'Не удалось показать геометрию обеих деталей. Постройте предпросмотр ещё раз.';
+    }
 };
 
 const generateSelectedConnectionMachining = async () => {
     if (!selectedConnection.value || connectionSaving.value) return;
 
     const connectionId = selectedConnection.value.id;
+    const preview = activeConnectionPreview.value;
+    if (selectedConnection.value.type === 'mortise_tenon' && (!preview || !connectionPreviewReady.value)) return;
     connectionSaving.value = true;
     connectionError.value = '';
 
     try {
-        await projects.generateProjectConnectionMachining(projectId, connectionId);
+        await projects.generateProjectConnectionMachining(projectId, connectionId, preview ? { expected_revision: preview.revision } : {});
+        connectionPreview.value = null;
         await Promise.all([
             projects.fetchParts(projectId),
             projects.fetchProjectConnections(projectId),
         ]);
         selectedConnectionId.value = connectionId;
     } catch (error) {
-        connectionError.value = error.response?.data?.message
-            ?? Object.values(error.response?.data?.errors ?? {})[0]?.[0]
-            ?? 'Не удалось создать обработку соединения.';
+        if (error.response?.status === 409) {
+            connectionPreview.value = null;
+            await Promise.all([projects.fetchParts(projectId), projects.fetchProjectConnections(projectId)]);
+            connectionError.value = 'Проект изменился. Постройте предпросмотр ещё раз.';
+        } else {
+            connectionError.value = Object.values(error.response?.data?.errors ?? {})[0]?.[0]
+                ?? error.response?.data?.message
+                ?? 'Не удалось создать обработку соединения.';
+        }
     } finally {
         connectionSaving.value = false;
     }
@@ -2029,11 +2187,32 @@ const removeSelectedConnection = async () => {
     clearDiagnosticFocus();
 };
 
-const clearDiagnosticFocus = () => {
-    diagnosticFocusInstanceIds.value = [];
+const setDiagnosticFocus = (instanceIds, fasteners = null) => {
+    diagnosticFocusInstanceIds.value = instanceIds;
+    diagnosticFastenerFocus.value = fasteners;
 };
+const clearDiagnosticFocus = () => setDiagnosticFocus([]);
+
+const toggleFastenerTool = () => {
+    if (fastenerTool.active) {
+        fastenerTool.close();
+        return;
+    }
+    measurementTool.value = null;
+    selectedConnectionId.value = null;
+    clearDiagnosticFocus();
+    inspectorVisible.value = true;
+    if (window.innerWidth <= 900) libraryVisible.value = false;
+    void fastenerTool.open();
+};
+watch([editorMode, explodeDistance], ([mode, exploded]) => {
+    if (mode === 'assembly' && exploded === 0) return;
+    fastenerTool.close();
+    if (diagnosticFastenerFocus.value) clearDiagnosticFocus();
+});
 
 const toggleMeasurement = (tool) => {
+    fastenerTool.close();
     measurementTool.value = measurementTool.value === tool ? null : tool;
     measurementResetId.value++;
 };
@@ -2055,7 +2234,7 @@ const startAssemblyGuide = async () => {
     activeAssemblyGroupId.value = null;
     isolatedGroupId.value = null;
     explodeDistance.value = 0;
-    diagnosticFocusInstanceIds.value = [];
+    clearDiagnosticFocus();
     assemblyGuideActive.value = true;
     await setAssemblyGuideStep(0);
 };
@@ -2089,8 +2268,14 @@ const inspectAnalysisIssue = async (issue) => {
         explodeDistance.value = 0;
         assemblyGuideActive.value = false;
         measurementTool.value = null;
-        diagnosticFocusInstanceIds.value = instanceIds;
-        selectedInstanceId.value = instanceIds[0];
+        const fasteners = context.fastener_ids?.length ? { ids: context.fastener_ids, status: context.fastener_status } : null;
+        if (fasteners) {
+            fastenerTool.close();
+            selectedConnectionId.value = null;
+            sectionAxis.value = null;
+        }
+        setDiagnosticFocus(instanceIds, fasteners);
+        selectedInstanceId.value = fasteners ? null : instanceIds[0];
         selectedPartId.value = projects.parts.find((part) => part.instances?.some((instance) => instance.id === instanceIds[0]))?.id ?? selectedPartId.value;
         await nextTick();
         diagnosticFocusRequestId.value++;
@@ -2548,6 +2733,12 @@ const saveProject = async () => {
 const saveCurrent = () => editorMode.value === 'part' ? savePart() : saveProject();
 const handleEditorHistoryKey = (event) => {
     if (showScriptEditor.value || showVersions.value) return;
+    if (event.key === 'Escape' && fastenerTool.active && !fastenerTool.busy && !showProjectAnalysis.value) {
+        if (fastenerTool.drillPreview) fastenerTool.cancelDrillPreview();
+        else if (fastenerTool.copyDraft) fastenerTool.cancelCopy();
+        else fastenerTool.close();
+        return;
+    }
     if (event.key === 'ArrowUp' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
         && !event.defaultPrevented && !event.isComposing
         && editorMode.value === 'assembly' && activeAssemblyGroup.value
@@ -2581,8 +2772,11 @@ const handleEditorHistoryKey = (event) => {
 
 onMounted(() => window.addEventListener('keydown', handleEditorHistoryKey));
 onBeforeUnmount(() => {
+    fastenerGeometry.dispose();
+    assemblyGeometryCache.clear();
     window.clearTimeout(partHistoryTimer);
     window.removeEventListener('keydown', handleEditorHistoryKey);
+    window.removeEventListener('afterprint', closeWorkshopPrint);
 });
 
 const openProjectAnalysis = async (partId = null) => {
@@ -2619,6 +2813,15 @@ const saveProjectTemplate = async () => {
 const refreshProjectAnalysis = async () => {
     projectAnalysisLoading.value = true;
     projectAnalysisError.value = '';
+    fastenerAnalysisLoading.value = true;
+    fastenerAnalysisError.value = '';
+    fastenerGeometry.retryFailed();
+
+    const fasteners = fastenerTool.reload().catch(() => {
+        fastenerAnalysisError.value = 'Не удалось загрузить крепёж. Нажмите «Пересчитать».';
+    }).finally(() => {
+        fastenerAnalysisLoading.value = false;
+    });
 
     try {
         projectAnalysis.value = await projects.fetchProjectAnalysis(projectId, cuttingSettings);
@@ -2627,16 +2830,30 @@ const refreshProjectAnalysis = async () => {
     } finally {
         projectAnalysisLoading.value = false;
     }
+    await fasteners;
 };
 
 const csvCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+
+const closeWorkshopPrint = () => {
+    workshopPrintReport.value = null;
+};
+
+const printWorkshopPlan = async () => {
+    if (!projectAnalysis.value || workshopPrintReport.value) return;
+
+    workshopPrintReport.value = projectAnalysis.value;
+    await nextTick();
+    window.addEventListener('afterprint', closeWorkshopPrint, { once: true });
+    window.print();
+};
 
 const exportManufacturingCsv = () => {
     if (!projectAnalysis.value) return;
 
     const report = projectAnalysis.value.manufacturing;
     const rows = [
-        ['Раздел', 'Заготовка', 'Материал', 'Длина, мм', 'Ширина, мм', 'Толщина, мм', 'Количество', 'Операций'],
+        ['Раздел', 'Заготовка', 'Материал', 'Длина, мм', 'Ширина, мм', 'Толщина, мм', 'Количество', 'Операций', 'Номер детали'],
         ...report.bill_of_materials.map((part) => [
             'Спецификация',
             part.name,
@@ -2646,16 +2863,19 @@ const exportManufacturingCsv = () => {
             part.dimensions.thickness,
             part.quantity,
             part.operation_count,
+            partWorkshopCode(part.part_id),
         ]),
         [],
-        ['Раскрой погонажа', 'Заготовка', 'Материал', 'Длина детали, мм', 'Хлыст №', 'Начало, мм', 'Остаток хлыста, мм'],
+        ['Раскрой досок', 'Заготовка', 'Материал', 'Длина детали, мм', 'Доска №', 'Начало, мм', 'Остаток по длине, мм', 'Полоса №', 'Ширина, мм', 'Отступ от кромки, мм', 'Номер детали'],
         ...report.linear_cutting.flatMap((group) => group.bars.flatMap((bar) => bar.cuts.map((cut) => [
-            'Погонаж', cut.name, group.material, cut.length, bar.number, cut.start, bar.waste_length,
+            'Доска', cut.name, group.material, cut.length, bar.number, cut.start,
+            bar.strips?.find(strip => strip.number === cut.strip)?.waste_length ?? bar.waste_length,
+            cut.strip ?? 1, cut.strip_width ?? group.section.width, cut.strip_offset ?? 0, partWorkshopCode(cut.part_id),
         ]))),
         [],
-        ['Раскрой листа', 'Заготовка', 'Материал', 'Длина, мм', 'Ширина, мм', 'Лист №', 'X, мм', 'Y, мм'],
+        ['Раскрой листа', 'Заготовка', 'Материал', 'Длина, мм', 'Ширина, мм', 'Лист №', 'X, мм', 'Y, мм', 'Номер детали'],
         ...report.sheet_cutting.flatMap((group) => group.sheets.flatMap((sheet) => sheet.placements.map((placement) => [
-            'Лист', placement.name, group.material, placement.length, placement.width, sheet.number, placement.x, placement.y,
+            'Лист', placement.name, group.material, placement.length, placement.width, sheet.number, placement.x, placement.y, partWorkshopCode(placement.part_id),
         ]))),
     ];
     const csv = `\ufeff${rows.map((row) => row.map(csvCell).join(';')).join('\r\n')}`;

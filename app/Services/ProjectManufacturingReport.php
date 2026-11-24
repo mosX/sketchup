@@ -9,6 +9,8 @@ use Illuminate\Support\Collection;
 
 class ProjectManufacturingReport
 {
+    public function __construct(private BoardCuttingPlan $boardCuttingPlan) {}
+
     private const float DefaultKerf = 3.2;
 
     private const float DefaultStockLength = 6000.0;
@@ -65,7 +67,10 @@ class ProjectManufacturingReport
         $plan = $project->material_plan ?? [];
         $assignments = collect($plan['assignments'] ?? [])->pluck('material_id', 'part_id');
         $supplies = collect($plan['supplies'] ?? []);
+        $sceneFasteners = $project->projectFasteners()->selectRaw('catalog_material_id, COUNT(*) as quantity')
+            ->groupBy('catalog_material_id')->pluck('quantity', 'catalog_material_id');
         $catalogIds = $assignments->values()->merge($supplies->pluck('material_id'))->push($plan['default_material_id'] ?? null)
+            ->merge($sceneFasteners->keys())
             ->filter()->unique();
         $catalog = CatalogMaterial::query()->where('user_id', $project->user_id)->whereIn('id', $catalogIds)->get()->keyBy('id');
 
@@ -94,11 +99,12 @@ class ProjectManufacturingReport
             $material = $catalog->get($id);
             if ($material->kind === 'board') {
                 $stockSettings = array_replace($settings, ['stock_length' => (float) $material->length_mm]);
-                $map = $this->linearMap(collect($group), $stockSettings, $material->name);
+                $map = $this->boardMap(collect($group), $stockSettings, $material);
                 $map['catalog_material_id'] = $id;
                 $boards[] = $map;
                 $packs = count($map['bars']);
-                $used = array_sum(array_column($map['bars'], 'used_length')) / $stockSettings['stock_length'];
+                $used = $packs - array_sum(array_column($map['bars'], 'reusable_area'))
+                    / ($stockSettings['stock_length'] * (float) $material->width_mm);
                 $unit = 'доска';
             } else {
                 $stockSettings = array_replace($settings, ['sheet_length' => (float) $material->length_mm, 'sheet_width' => (float) $material->width_mm]);
@@ -122,14 +128,21 @@ class ProjectManufacturingReport
             }
         }
 
-        foreach ($supplies as $supply) {
-            $material = $catalog->get($supply['material_id']);
+        $manual = $supplies->pluck('quantity', 'material_id');
+        foreach ($manual->keys()->merge($sceneFasteners->keys())->unique() as $id) {
+            $material = $catalog->get($id);
             if ($material === null) {
                 continue;
             }
-            $quantity = (float) $supply['quantity'];
+            $manualQuantity = (float) $manual->get($id, 0);
+            $sceneQuantity = (int) $sceneFasteners->get($id, 0);
+            $quantity = $manualQuantity + $sceneQuantity;
             $packSize = (float) $material->pack_quantity;
-            $items[] = $this->costItem($material, $material->unit, $quantity, (int) ceil(round($quantity / $packSize, 10)), $packSize);
+            $items[] = [
+                ...$this->costItem($material, $material->unit, $quantity, (int) ceil(round($quantity / $packSize, 10)), $packSize),
+                'manual_quantity' => $manualQuantity,
+                'scene_quantity' => $sceneQuantity,
+            ];
         }
 
         return [
@@ -151,7 +164,7 @@ class ProjectManufacturingReport
     {
         return (float) $part->thickness === (float) $material->thickness_mm
             && ($material->kind === 'sheet' || (
-                $material->kind === 'board' && (float) $part->width === (float) $material->width_mm
+                $material->kind === 'board' && (float) $part->width <= (float) $material->width_mm
                 && $part->grain_axis !== 'width'
             ));
     }
@@ -246,10 +259,7 @@ class ProjectManufacturingReport
     private function linearMap(Collection $group, array $settings, string $material): array
     {
         $firstPart = $group->first();
-        $pieces = $group->flatMap(fn (PartDefinition $part): array => collect(range(1, $part->instances->count()))
-            ->map(fn (int $piece): array => ['part_id' => $part->id, 'name' => $part->name, 'piece' => $piece, 'length' => $part->length])
-            ->all())->sortByDesc('length')->values();
-        [$bars, $oversized] = $this->packLinearPieces($pieces->all(), $settings);
+        [$bars, $oversized] = $this->packLinearPieces($this->linearPieces($group), $settings);
 
         return [
             'material' => $material,
@@ -258,6 +268,36 @@ class ProjectManufacturingReport
             'bars' => $bars,
             'oversized' => $oversized,
         ];
+    }
+
+    private function boardMap(Collection $group, array $settings, CatalogMaterial $material): array
+    {
+        $strips = [];
+        $oversized = [];
+        foreach ($group->groupBy(fn (PartDefinition $part): string => (string) $part->width)->sortKeys(SORT_NUMERIC) as $width => $parts) {
+            [$packed, $tooLong] = $this->packLinearPieces($this->linearPieces($parts), $settings);
+            foreach ($packed as $strip) {
+                $strips[] = [...$strip, 'width' => (float) $width];
+            }
+            array_push($oversized, ...$tooLong);
+        }
+
+        return [
+            'material' => $material->name,
+            'section' => ['width' => (float) $material->width_mm, 'thickness' => (float) $material->thickness_mm],
+            'stock_length' => $settings['stock_length'],
+            'bars' => $this->boardCuttingPlan->pack($strips, $settings['stock_length'], (float) $material->width_mm, $settings['kerf']),
+            'oversized' => $oversized,
+        ];
+    }
+
+    private function linearPieces(Collection $group): array
+    {
+        $pieces = $group->flatMap(fn (PartDefinition $part): array => collect(range(1, $part->instances->count()))
+            ->map(fn (int $piece): array => ['part_id' => $part->id, 'name' => $part->name, 'piece' => $piece, 'length' => $part->length])
+            ->all())->sortByDesc('length')->values();
+
+        return $pieces->all();
     }
 
     /**

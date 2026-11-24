@@ -164,8 +164,13 @@ export const useProjectsStore = defineStore('projects', {
             return data.data;
         },
 
-        async generateProjectConnectionMachining(projectId, connectionId) {
-            const { data } = await axios.post(`/projects/${projectId}/connections/${connectionId}/machining`);
+        async previewProjectConnectionMachining(projectId, connectionId) {
+            const { data } = await axios.get(`/v1/projects/${projectId}/connections/${connectionId}/machining/preview`);
+            return data.data;
+        },
+
+        async generateProjectConnectionMachining(projectId, connectionId, payload = {}) {
+            const { data } = await axios.post(`/projects/${projectId}/connections/${connectionId}/machining`, payload);
             const index = this.connections.findIndex((connection) => connection.id === connectionId);
 
             if (index !== -1) this.connections[index] = data.data;

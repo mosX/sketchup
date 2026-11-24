@@ -66,7 +66,7 @@
                     <thead class="text-stone-500"><tr><th class="py-2 pr-2">Позиция</th><th>Расход</th><th>Закупка</th><th>Остаток</th><th>Цена</th><th>Расход, грн</th><th>Закупка, грн</th></tr></thead>
                     <tbody class="divide-y divide-emerald-900/10">
                         <tr v-for="item in displayCost.items" :key="item.material_id">
-                            <th class="py-2 pr-2 font-medium">{{ item.name }}</th><td>{{ item.quantity }} {{ item.unit }}</td><td>{{ item.packs }} {{ item.kind === 'consumable' ? 'уп.' : 'шт.' }}</td>
+                            <th class="py-2 pr-2 font-medium">{{ item.name }}<small v-if="item.scene_quantity" class="block text-stone-500">На модели {{ item.scene_quantity }} · вручную {{ item.manual_quantity }}</small></th><td>{{ item.quantity }} {{ item.unit }}</td><td>{{ item.packs }} {{ item.kind === 'consumable' ? 'уп.' : 'шт.' }}</td>
                             <td>{{ item.remaining_quantity }} {{ item.unit }}</td>
                             <td>{{ materialCost(item.pack_price_minor) }}</td><td>{{ materialCost(item.consumed_minor) }}</td><td>{{ materialCost(item.purchase_minor) }}</td>
                         </tr>
@@ -74,7 +74,7 @@
                 </table>
             </div>
             <div class="mt-3 flex flex-wrap items-center gap-2">
-                <button class="button-secondary button-compact" type="button" :disabled="busy || analysisBusy || dirty || !costing?.configured || !costing?.items?.length || Boolean(estimate)" @click="freezeEstimate">Зафиксировать смету</button>
+                <button class="button-secondary button-compact" type="button" :disabled="busy || analysisBusy || dirty || !costing?.items?.length || Boolean(estimate)" @click="freezeEstimate">Зафиксировать смету</button>
                 <select v-if="estimates.length" :value="estimate?.id ?? ''" class="field-input max-w-56" aria-label="Сохранённые сметы" :disabled="busy" @change="openEstimate($event.target.value)">
                     <option value="">Текущие цены</option>
                     <option v-for="saved in estimates" :key="saved.id" :value="saved.id">{{ new Date(saved.created_at).toLocaleString('ru-UA') }}</option>

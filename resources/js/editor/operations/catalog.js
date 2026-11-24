@@ -59,7 +59,7 @@ export const createOperation = (type, dimensions) => {
     return createGrooveOperation(common, dimensions);
 };
 
-export const operationLabel = (operation) => ({
+export const operationLabel = (operation) => operation.type === 'drill' && operation.bottom_diameter != null ? 'Зенковка' : ({
     cross_cut: 'Поперечный рез',
     rip_cut: 'Продольный рез',
     groove: 'Паз пилой',
@@ -80,7 +80,8 @@ export const operationSummary = (operation) => {
     }
     if (operation.type === 'drill') {
         const depth = operation.through ? 'сквозное' : `глубина ${operation.depth} мм`;
-        return `Ø${operation.diameter} мм · ${depth} · ${faceLabel(operation.face)}`;
+        const diameter = operation.bottom_diameter == null ? `Ø${operation.diameter}` : `Ø${operation.diameter} → Ø${operation.bottom_diameter}`;
+        return `${diameter} мм · ${depth} · ${faceLabel(operation.face)}`;
     }
 
     return `${operation.groove_length} × ${operation.width} × ${operation.depth} мм · ${operation.path_angle}°`;

@@ -3,13 +3,13 @@ import { createResultCache, geometryKey } from './resultCache.js';
 
 const abortError = () => new DOMException('Geometry calculation was superseded.', 'AbortError');
 
-export const createGeometryWorkerClient = () => {
+export const createGeometryWorkerClient = (sharedCache = null) => {
     const pendingRequests = new Map();
     let nextRequestId = 1;
     let worker;
     let developmentBootstrapUrl;
     let watchdog;
-    const cache = createResultCache();
+    const cache = sharedCache ?? createResultCache();
     const statistics = { hits: 0, calculations: 0, lastDurationMs: 0 };
     const unpack = data => ({ partGeometry: deserializeGeometry(data.partGeometry), offcutGeometry: deserializeGeometry(data.offcutGeometry) });
 
@@ -100,7 +100,7 @@ export const createGeometryWorkerClient = () => {
 
     const dispose = () => {
         stopWorker(abortError());
-        cache.clear();
+        if (!sharedCache) cache.clear();
         if (developmentBootstrapUrl) {
             URL.revokeObjectURL(developmentBootstrapUrl);
             developmentBootstrapUrl = undefined;

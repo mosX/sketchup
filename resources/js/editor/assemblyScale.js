@@ -13,7 +13,7 @@ const operationMeasurements = {
     groove: ['center_u', 'center_v', 'groove_length', 'width', 'depth', 'blade_diameter'],
     edge_roundover: ['radius'],
     plunge_route: ['start_u', 'start_v', 'travel_length', 'cutter_diameter', 'depth'],
-    drill: ['center_u', 'center_v', 'diameter', 'depth'],
+    drill: ['center_u', 'center_v', 'diameter', 'bottom_diameter', 'depth'],
 };
 
 export const scaleFactorFromPointer = (start, current, pivot, axisConstrained = false) => {

@@ -10,6 +10,7 @@ use App\Models\Project;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 
 class PartDefinitionController extends Controller
@@ -54,8 +55,17 @@ class PartDefinitionController extends Controller
      */
     public function update(UpdatePartDefinitionRequest $request, Project $project, PartDefinition $partDefinition): PartDefinitionResource
     {
-        $partDefinition->update($request->validated());
-        $project->increment('revision');
+        DB::transaction(function () use ($request, $project, $partDefinition): void {
+            $lockedProject = Project::query()->lockForUpdate()->findOrFail($project->id);
+            $part = $lockedProject->partDefinitions()->lockForUpdate()->findOrFail($partDefinition->id);
+            $part->fill($request->validated());
+            if ($part->isDirty(['length', 'width', 'thickness'])) {
+                $part->mortiseTenonConnections()->where('machining_status', 'generated')
+                    ->update(['machining_status' => 'outdated', 'is_verified' => false]);
+            }
+            $part->save();
+            $lockedProject->increment('revision');
+        }, attempts: 3);
 
         return new PartDefinitionResource($partDefinition->refresh()->load('instances')->loadCount('instances'));
     }

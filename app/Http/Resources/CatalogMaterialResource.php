@@ -19,6 +19,9 @@ class CatalogMaterialResource extends JsonResource
             'unit' => $this->unit,
             'pack_quantity' => $this->pack_quantity,
             'price' => $this->price,
+            'fastener_type' => $this->resource->fastenerType(),
+            'fastener_diameter' => $this->fastener_diameter,
+            'fastener_length' => $this->fastener_length,
         ];
     }
 }

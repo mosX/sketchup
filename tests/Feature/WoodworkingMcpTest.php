@@ -27,7 +27,8 @@ class WoodworkingMcpTest extends TestCase
             'capabilities' => (object) [],
             'clientInfo' => ['name' => 'test', 'version' => '1.0'],
         ])->assertOk()->assertJsonPath('result.serverInfo.name', 'sketchup-woodworking');
-        $this->rpc('tools/list')->assertOk()->assertJsonCount(16, 'result.tools')
+        $this->rpc('tools/list')->assertOk()->assertJsonCount(17, 'result.tools')
+            ->assertJsonFragment(['name' => 'woodworking_preview_connection_machining'])
             ->assertJsonFragment(['name' => 'woodworking_apply_commands']);
     }
 

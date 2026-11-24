@@ -49,6 +49,7 @@ trait ValidatesPartOperations
             "{$attribute}.*.cutter_profile" => ['sometimes', 'string', 'in:straight,dovetail,v_groove'],
             "{$attribute}.*.cutter_angle" => ['sometimes', 'numeric', 'between:0,170'],
             "{$attribute}.*.diameter" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
+            "{$attribute}.*.bottom_diameter" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.through" => ['sometimes', 'boolean'],
         ];
     }
@@ -232,6 +233,9 @@ trait ValidatesPartOperations
         }
 
         $radius = (float) $operation['diameter'] / 2;
+        if (isset($operation['bottom_diameter']) && is_numeric($operation['bottom_diameter']) && (float) $operation['bottom_diameter'] >= $radius * 2) {
+            $validator->errors()->add($field('bottom_diameter'), 'Нижний диаметр должен быть меньше диаметра на поверхности.');
+        }
         $centerU = (float) $operation['center_u'];
         $centerV = (float) $operation['center_v'];
 

@@ -20,12 +20,16 @@ class CapabilityControllerTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.schema_version', 11)
+            ->assertJsonPath('data.schema_version', 18)
+            ->assertJsonPath('data.fasteners.types.1', 'nail')
+            ->assertJsonPath('data.fasteners.copy.4', 'mirror_u')
             ->assertJsonPath('data.part_operations.groove.1', 'center_u')
             ->assertJsonPath('data.part_operations.edge_roundover.1', 'radius')
             ->assertJsonPath('data.part_operations.plunge_route.7', 'cutter_profile')
             ->assertJsonPath('data.part_operations.drill.3', 'diameter')
             ->assertJsonPath('data.part_operations.drill.5', 'through')
+            ->assertJsonPath('data.part_operation_optional_fields.drill.0', 'bottom_diameter')
+            ->assertJsonPath('data.fasteners.drilling.2', 'countersink')
             ->assertJsonPath('data.assembly_groups.supports_nested_groups', true)
             ->assertJsonPath('data.commands.4', 'create_group')
             ->assertJsonPath('data.project_analysis.manufacturing.2', 'sheet_cutting')

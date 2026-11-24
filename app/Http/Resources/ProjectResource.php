@@ -28,6 +28,7 @@ class ProjectResource extends JsonResource
             'parts' => PartDefinitionResource::collection($this->whenLoaded('partDefinitions')),
             'assembly_groups' => AssemblyGroupResource::collection($this->whenLoaded('assemblyGroups')),
             'connections' => ProjectConnectionResource::collection($this->whenLoaded('projectConnections')),
+            'fasteners' => ProjectFastenerResource::collection($this->whenLoaded('projectFasteners')),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

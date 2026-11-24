@@ -66,7 +66,7 @@ class ProjectMaterialsTest extends TestCase
         $assignments = [];
         foreach ([
             [300, 100, 30, $board->id],
-            [300, 50, 30, $board->id],
+            [300, 110, 30, $board->id],
             [1100, 100, 30, $board->id],
             [300, 100, 30, null],
             [500, 250, 18, $sheet->id],
@@ -90,6 +90,36 @@ class ProjectMaterialsTest extends TestCase
 
         $this->assertEqualsCanonicalizing(['unassigned', 'incompatible', 'oversized'], array_column($response->json('data.manufacturing.costing.issues'), 'reason'));
         $this->assertGreaterThan(0, $response->json('data.manufacturing.sheet_cutting.0.sheets.0.reusable_area'));
+    }
+
+    public function test_one_catalog_board_can_produce_multiple_widths_and_preserves_the_kerf(): void
+    {
+        $project = Project::factory()->create();
+        $board = CatalogMaterial::factory()->create(['user_id' => $project->user_id]);
+        $wide = PartDefinition::factory()->for($project)->create(['length' => 1000, 'width' => 60.5, 'thickness' => 30]);
+        $narrow = PartDefinition::factory()->for($project)->create(['length' => 1500, 'width' => 35.5, 'thickness' => 30]);
+        PartInstance::factory()->count(2)->for($project)->for($wide)->create();
+        PartInstance::factory()->for($project)->for($narrow)->create();
+        Sanctum::actingAs($project->user, ['projects:read', 'projects:write']);
+        $base = "/api/v1/projects/{$project->id}";
+        $this->putJson("$base/materials", ['default_material_id' => $board->id, 'assignments' => [], 'supplies' => []])->assertOk();
+
+        $response = $this->getJson("$base/analysis?kerf_mm=4")->assertOk();
+
+        $response
+            ->assertJsonCount(1, 'data.manufacturing.linear_cutting.0.bars')
+            ->assertJsonCount(1, 'data.manufacturing.linear_cutting.0.bars.0.rip_cuts')
+            ->assertJsonPath('data.manufacturing.linear_cutting.0.bars.0.rip_cuts.0.position', 60.5)
+            ->assertJsonPath('data.manufacturing.linear_cutting.0.bars.0.strips.1.offset', 64.5)
+            ->assertJsonPath('data.manufacturing.linear_cutting.0.bars.0.strips.1.width', 35.5)
+            ->assertJsonPath('data.manufacturing.linear_cutting.0.bars.0.strips.0.cuts.1.start', 1014)
+            ->assertJsonCount(2, 'data.manufacturing.linear_cutting.0.bars.0.offcuts')
+            ->assertJsonPath('data.manufacturing.costing.purchase_minor', 30000)
+            ->assertJsonPath('data.manufacturing.costing.consumed_minor', 11808);
+
+        $this->getJson("$base/analysis?kerf_mm=4.1")->assertOk()
+            ->assertJsonCount(2, 'data.manufacturing.linear_cutting.0.bars')
+            ->assertJsonPath('data.manufacturing.costing.purchase_minor', 60000);
     }
 
     public function test_catalog_and_project_plan_enforce_ownership_and_item_types(): void

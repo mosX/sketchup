@@ -14,7 +14,8 @@ class UpdateProjectConnection
     public function handle(Project $project, ProjectConnection $connection, array $attributes): ProjectConnection
     {
         return DB::transaction(function () use ($attributes, $connection, $project): ProjectConnection {
-            $connection = ProjectConnection::query()->lockForUpdate()->findOrFail($connection->id);
+            $project = Project::query()->lockForUpdate()->findOrFail($project->id);
+            $connection = $project->projectConnections()->lockForUpdate()->findOrFail($connection->id);
             $parametersChanged = array_key_exists('parameters', $attributes)
                 && $attributes['parameters'] !== $connection->parameters;
 

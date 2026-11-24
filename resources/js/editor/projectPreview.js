@@ -38,6 +38,7 @@ export const projectPreviewFaces = ({ parts = [], assembly_groups: groups = [] }
 
                 const points = indices.map(index => vertices[index]);
                 faces.push({
+                    partId: part.id,
                     points: points.map(point => [dot(point, right), dot(point, down)]),
                     depth: points.reduce((sum, point) => sum + dot(point, depth), 0) / points.length,
                     color: `hsl(31 43% ${48 + 25 * Math.max(0, dot(worldNormal, [-0.3, -0.55, 0.78])) + (part.id % 4) * 1.5}%)`,

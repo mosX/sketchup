@@ -68,15 +68,10 @@ const subtractOperations = (part, operations, context) => {
 export const createPartGeometry = (part, providedContext = null) => {
     const context = providedContext ?? createCsgContext();
     const ownsContext = providedContext === null;
-    const { length, width, thickness } = partSize(part);
     let result;
 
     try {
         result = subtractOperations(part, part.operations ?? [], context);
-    } catch (error) {
-        result?.geometry.dispose();
-        console.error('Не удалось построить операцию заготовки.', error);
-        result = new Brush(new THREE.BoxGeometry(length, thickness, width));
     } finally {
         if (ownsContext) context.dispose();
     }

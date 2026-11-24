@@ -8,6 +8,7 @@ use App\Models\PartDefinition;
 use App\Models\PartInstance;
 use App\Models\Project;
 use App\Models\ProjectConnection;
+use App\Models\ProjectFastener;
 use App\Models\ProjectVersion;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -33,9 +34,9 @@ class ProjectVersionManager
             if (($snapshot['schema_version'] ?? null) !== 1) {
                 throw ValidationException::withMessages(['version' => 'Эта версия снимка не поддерживается.']);
             }
-            $models = ['parts' => PartDefinition::class, 'groups' => AssemblyGroup::class, 'instances' => PartInstance::class, 'connections' => ProjectConnection::class];
+            $models = ['parts' => PartDefinition::class, 'groups' => AssemblyGroup::class, 'instances' => PartInstance::class, 'connections' => ProjectConnection::class, 'fasteners' => ProjectFastener::class];
             foreach ($models as $key => $model) {
-                if ($model::query()->whereIn('id', array_column($snapshot[$key], 'id'))->where('project_id', '!=', $project->id)->exists()) {
+                if ($model::query()->whereIn('id', array_column($snapshot[$key] ?? [], 'id'))->where('project_id', '!=', $project->id)->exists()) {
                     throw ValidationException::withMessages(['version' => 'Идентификаторы снимка заняты другим проектом. Восстановление отменено.']);
                 }
             }
@@ -45,7 +46,7 @@ class ProjectVersionManager
             $project->assemblyGroups()->delete();
             $project->partDefinitions()->delete();
             foreach ($models as $key => $model) {
-                foreach ($snapshot[$key] as $row) {
+                foreach ($snapshot[$key] ?? [] as $row) {
                     $row['project_id'] = $project->id;
                     if ($key === 'groups') {
                         $row['parent_id'] = null;
@@ -85,6 +86,7 @@ class ProjectVersionManager
             'groups' => $project->assemblyGroups()->orderBy('id')->get()->map->getAttributes()->all(),
             'instances' => $project->partInstances()->orderBy('id')->get()->map->getAttributes()->all(),
             'connections' => $project->projectConnections()->orderBy('id')->get()->map->getAttributes()->all(),
+            'fasteners' => $project->projectFasteners()->orderBy('id')->get()->map->getAttributes()->all(),
         ];
         if (strlen(json_encode($snapshot, JSON_THROW_ON_ERROR)) > 10 * 1024 * 1024) {
             throw ValidationException::withMessages(['version' => 'Снимок превышает лимит 10 МБ.']);

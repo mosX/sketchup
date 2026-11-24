@@ -21,9 +21,21 @@
                         </label>
                     </div>
                     <div v-else class="grid grid-cols-2 gap-2">
-                        <label class="field-label">Единица<input v-model.trim="form.unit" class="field-input" maxlength="24" required placeholder="шт., мл, г"></label>
-                        <label class="field-label">Кол-во в упаковке<input v-model.number="form.pack_quantity" class="field-input" type="number" min="0.001" max="1000000" step="0.001" required></label>
+                        <label class="field-label">Единица<input :value="isFastener ? 'шт.' : form.unit" class="field-input" maxlength="24" required placeholder="шт., мл, г" :disabled="isFastener" @input="form.unit = $event.target.value.trim()"></label>
+                        <label class="field-label">Кол-во в упаковке<input v-model.number="form.pack_quantity" class="field-input" type="number" :min="isFastener ? 1 : 0.001" max="1000000" :step="isFastener ? 1 : 0.001" required></label>
                     </div>
+                    <template v-if="form.kind === 'consumable'">
+                        <label class="field-label">Назначение расходника
+                            <select v-model="form.fastener_type" class="field-input">
+                                <option :value="null">Только для сметы</option>
+                                <option v-for="(label, type) in fastenerTypeLabels" :key="type" :value="type">{{ label }}</option>
+                            </select>
+                        </label>
+                        <div v-if="isFastener" class="grid grid-cols-2 gap-2">
+                            <label class="field-label">Диаметр, мм<input v-model.number="form.fastener_diameter" class="field-input" type="number" min="0.5" max="30" step="0.01" required></label>
+                            <label class="field-label">Длина, мм<input v-model.number="form.fastener_length" class="field-input" type="number" min="1" max="1000" step="0.01" required></label>
+                        </div>
+                    </template>
                     <label class="field-label">{{ form.kind === 'consumable' ? 'Цена упаковки' : 'Цена за 1 шт.' }}, грн<input v-model.number="form.price" class="field-input" type="number" min="0" max="100000000" step="0.01" placeholder="Можно указать позже"></label>
                     <div class="flex flex-wrap gap-2">
                         <button class="button-primary" :disabled="busy" type="submit">{{ editingId ? 'Сохранить' : 'Добавить' }}</button>
@@ -41,7 +53,7 @@
                         <li v-for="material in filteredMaterials" :key="material.id" class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                             <div class="min-w-0">
                                 <strong class="block break-words text-sm">{{ material.name }}</strong>
-                                <small class="text-stone-500">{{ materialKindLabels[material.kind] }} · {{ materialSize(material) }}</small>
+                                <small class="text-stone-500">{{ fastenerTypeLabels[material.fastener_type] ?? materialKindLabels[material.kind] }} · {{ materialSize(material) }}</small>
                             </div>
                             <div class="flex items-center gap-3">
                                 <strong class="text-sm font-semibold tabular-nums">{{ materialCost(material.price === null ? null : Number(material.price) * 100) }}</strong>
@@ -59,15 +71,16 @@
 import axios from 'axios';
 import { computed, onMounted, reactive, ref } from 'vue';
 import AppLayout from '../layouts/AppLayout.vue';
-import { materialCost, materialKindLabels, materialSize } from '../editor/materialCatalog.js';
+import { fastenerTypeLabels, materialCost, materialKindLabels, materialSize } from '../editor/materialCatalog.js';
 
 const dimensions = [
     { key: 'width_mm', label: 'Ширина, мм' },
     { key: 'thickness_mm', label: 'Толщина, мм' },
     { key: 'length_mm', label: 'Длина, мм' },
 ];
-const emptyForm = () => ({ name: '', kind: 'board', length_mm: '', width_mm: '', thickness_mm: '', unit: 'шт.', pack_quantity: 1, price: '' });
+const emptyForm = () => ({ name: '', kind: 'board', length_mm: '', width_mm: '', thickness_mm: '', unit: 'шт.', pack_quantity: 1, price: '', fastener_type: null, fastener_diameter: '', fastener_length: '' });
 const form = reactive(emptyForm());
+const isFastener = computed(() => form.kind === 'consumable' && form.fastener_type !== null);
 const materials = ref([]);
 const search = ref('');
 const editingId = ref(null);
@@ -98,7 +111,14 @@ const save = async () => {
     busy.value = true;
     error.value = '';
     try {
-        const payload = { ...form, price: form.price === '' ? null : form.price };
+        const payload = {
+            ...form,
+            price: form.price === '' ? null : form.price,
+            pack_quantity: Number(form.pack_quantity),
+            fastener_type: isFastener.value ? form.fastener_type : null,
+            fastener_diameter: isFastener.value ? form.fastener_diameter : null,
+            fastener_length: isFastener.value ? form.fastener_length : null,
+        };
         if (editingId.value) {
             await axios.put(`/v1/materials/${editingId.value}`, payload);
         } else {
@@ -107,7 +127,8 @@ const save = async () => {
         reset();
         await load();
     } catch (requestError) {
-        error.value = requestError.response?.data?.message ?? 'Не удалось сохранить позицию.';
+        const data = requestError.response?.data;
+        error.value = Object.values(data?.errors ?? {})[0]?.[0] ?? data?.message ?? 'Не удалось сохранить позицию.';
     } finally {
         busy.value = false;
     }

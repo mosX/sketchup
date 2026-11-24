@@ -15,7 +15,7 @@ class CapabilityController extends Controller
         return response()->json([
             'data' => [
                 'api_version' => 'v1',
-                'schema_version' => 11,
+                'schema_version' => 18,
                 'coordinate_system' => [
                     'units' => 'millimeters',
                     'angles' => 'degrees',
@@ -55,16 +55,33 @@ class CapabilityController extends Controller
                     'preserves' => ['part_operations', 'assembly_groups', 'instance_rotations'],
                     'splits_part_variants_for_non_uniform_scaling' => true,
                 ],
+                'fasteners' => [
+                    'type' => 'screw',
+                    'types' => ['screw', 'nail'],
+                    'catalog_fields' => ['fastener_type', 'fastener_diameter', 'fastener_length'],
+                    'drilling_supported_types' => ['screw'],
+                    'placement' => ['source_instance_id', 'target_instance_id', 'catalog_material_id', 'face', 'center_u', 'center_v', 'sink'],
+                    'row_parameters' => ['count', 'row_axis', 'spacing', 'row_target_instance_ids'],
+                    'row_limit' => 50,
+                    'copy' => ['fastener_ids', 'source_instance_id', 'target_instance_id', 'face', 'mirror_u', 'mirror_v', 'dry_run', 'expected_revision', 'row_target_instance_ids'],
+                    'row_target_order' => ['placement' => 'row_index', 'copy' => 'ascending_fastener_id'],
+                    'included_in_project_costing' => true,
+                    'drilling' => ['clearance', 'pilot', 'countersink', 'dry_run', 'expected_revision'],
+                    'countersink_fields' => ['countersink', 'countersink_diameter', 'countersink_depth'],
+                ],
                 'connections' => [
                     'types' => ['butt', 'half_lap', 'mortise_tenon', 'dowel'],
                     'links' => ['primary_instance_id', 'secondary_instance_id'],
                     'supports_verification' => true,
                     'supports_machining_generation' => true,
-                    'machining_statuses' => ['pending', 'generated', 'not_required'],
+                    'machining_statuses' => ['pending', 'generated', 'not_required', 'outdated'],
                     'generated_operations_are_applied' => true,
                     'shared_parts_are_split_before_machining' => true,
                     'placement_parameters' => ['primary_center_u', 'primary_center_v', 'secondary_center_u', 'secondary_center_v', 'joint_angle'],
                     'supports_machining_regeneration' => true,
+                    'machining_preview_types' => ['mortise_tenon'],
+                    'machining_apply_accepts_expected_revision' => true,
+                    'machining_invalidated_on_part_resize' => ['mortise_tenon'],
                     'supports_machining_reset' => true,
                 ],
                 'part_operations' => [
@@ -81,6 +98,7 @@ class CapabilityController extends Controller
                     'cutter_profile' => ['straight', 'dovetail', 'v_groove'],
                     'edge' => ['top_left', 'top_right', 'bottom_left', 'bottom_right', 'top_start', 'top_end', 'bottom_start', 'bottom_end', 'start_left', 'start_right', 'end_left', 'end_right'],
                 ],
+                'part_operation_optional_fields' => ['drill' => ['bottom_diameter']],
                 'limits' => [
                     'commands_per_batch' => 100,
                     'operations_per_part' => 50,

@@ -233,6 +233,61 @@ class ProjectConnectionControllerTest extends TestCase
         $this->assertSame(10.0, (float) $secondaryPart->operations[0]['width']);
     }
 
+    public function test_resizing_a_part_marks_its_joinery_outdated_and_previews_both_parts_before_replacing_operations(): void
+    {
+        $project = Project::factory()->create();
+        $primary = PartDefinition::factory()->for($project)->create(['length' => 600, 'width' => 80, 'thickness' => 40]);
+        $secondary = PartDefinition::factory()->for($project)->create(['length' => 500, 'width' => 100, 'thickness' => 50]);
+        $primaryInstance = PartInstance::factory()->for($project)->for($primary)->create();
+        $secondaryInstance = PartInstance::factory()->for($project)->for($secondary)->create();
+        $connection = $project->projectConnections()->create([
+            'primary_instance_id' => $primaryInstance->id,
+            'secondary_instance_id' => $secondaryInstance->id,
+            'type' => 'mortise_tenon',
+        ]);
+        Sanctum::actingAs($project->user, ['projects:write', 'projects:read']);
+        $base = "/api/v1/projects/{$project->id}";
+        $connectionPath = "$base/connections/{$connection->id}";
+        $machining = "$connectionPath/machining";
+        $this->postJson($machining)->assertOk();
+        $this->patchJson($connectionPath, ['is_verified' => true])->assertOk();
+        $oldPrimary = $primary->refresh()->operations;
+        $oldSecondary = $secondary->refresh()->operations;
+        $this->patchJson("$base/parts/{$primary->id}", ['width' => 60, 'operations' => $oldPrimary])->assertOk();
+
+        $this->assertSame('outdated', $connection->refresh()->machining_status);
+        $this->assertFalse($connection->is_verified);
+        $this->assertSame($oldPrimary, $primary->refresh()->operations);
+        $revision = $project->refresh()->revision;
+        $plan = $this->getJson("$machining/preview")->assertOk()
+            ->assertJsonPath('data.revision', $revision)
+            ->assertJsonPath('data.parts.primary.instance_id', $primaryInstance->id)
+            ->assertJsonPath('data.parts.secondary.instance_id', $secondaryInstance->id)
+            ->assertJsonPath('data.parts.primary.operations.0.groove_length', 15)
+            ->assertJsonPath('data.parts.secondary.operations.0.groove_length', 30)
+            ->json('data.parts');
+        $this->assertSame($revision, $project->refresh()->revision);
+        $this->assertSame($oldSecondary, $secondary->refresh()->operations);
+
+        $this->postJson($machining, ['expected_revision' => $revision - 1])->assertConflict();
+        $this->assertSame($oldPrimary, $primary->refresh()->operations);
+        $this->postJson($machining, ['expected_revision' => $revision])->assertOk()
+            ->assertJsonPath('data.machining_status', 'generated');
+        $this->assertSame($revision + 1, $project->refresh()->revision);
+        foreach (['primary' => $primary, 'secondary' => $secondary] as $role => $part) {
+            $comparable = fn (array $operations): array => collect($operations)
+                ->map(fn (array $operation): array => array_diff_key($operation, ['id' => true]))->all();
+            $this->assertEquals($comparable($plan[$role]['operations']), $comparable($part->refresh()->operations));
+            $this->assertEmpty(array_intersect($plan[$role]['replaces'], array_column($part->operations, 'id')));
+        }
+
+        $newSecondary = $secondary->operations;
+        $this->patchJson("$base/parts/{$secondary->id}", ['thickness' => 8, 'operations' => $newSecondary])->assertOk();
+        $this->getJson("$machining/preview")->assertUnprocessable()->assertJsonValidationErrors('parameters.secondary');
+        $this->assertSame($newSecondary, $secondary->refresh()->operations);
+        $this->assertSame('outdated', $connection->refresh()->machining_status);
+    }
+
     public function test_butt_connection_is_marked_as_not_requiring_machining(): void
     {
         $user = User::factory()->create();

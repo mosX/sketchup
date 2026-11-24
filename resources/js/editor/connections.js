@@ -106,3 +106,34 @@ export const connectionOperationPlan = (connection, parts) => {
         { ...secondary, operations: [groove(secondary.face, secondary.center, tenonWidth, tenonThickness, tenonLength)] },
     ];
 };
+
+export const connectionMachiningPreviewParts = (parts, preview) => {
+    if (!preview) return parts;
+
+    const planned = Object.values(preview.parts);
+    if (!planned.every(entry => parts.some(part => part.id === entry.part_id && part.instances?.some(instance => instance.id === entry.instance_id)))) {
+        return parts;
+    }
+    const byInstance = new Map(planned.map(entry => [entry.instance_id, entry]));
+
+    return parts.flatMap(part => {
+        if (!part.instances?.some(instance => byInstance.has(instance.id))) return [part];
+
+        const unchanged = [];
+        const previews = [];
+        for (const instance of part.instances) {
+            const entry = byInstance.get(instance.id);
+            if (!entry) {
+                unchanged.push(instance);
+                continue;
+            }
+            const replaced = new Set(entry.replaces);
+            previews.push({
+                ...part,
+                instances: [instance],
+                operations: [...(part.operations ?? []).filter(operation => !replaced.has(operation.id)), ...entry.operations],
+            });
+        }
+        return [...(unchanged.length ? [{ ...part, instances: unchanged }] : []), ...previews];
+    });
+};

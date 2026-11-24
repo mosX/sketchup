@@ -121,6 +121,7 @@ import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/ge
 import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
 import { geometryKey } from '../editor/geometry/resultCache.js';
 import { connectionFacePlacement, connectionOperationPlan } from '../editor/connections.js';
+import { createFastenerMesh } from '../editor/fasteners.js';
 
 const props = defineProps({
     mode: { type: String, default: 'assembly' },
@@ -141,6 +142,7 @@ const props = defineProps({
     ghostedInstanceIds: { type: Array, default: () => [] },
     explodeDistance: { type: Number, default: 0 },
     focusedInstanceIds: { type: Array, default: () => [] },
+    focusedFasteners: { type: Object, default: null },
     focusRequestId: { type: Number, default: 0 },
     measurementTool: { type: String, default: null },
     measurementResetId: { type: Number, default: 0 },
@@ -149,9 +151,17 @@ const props = defineProps({
     sectionInverted: { type: Boolean, default: false },
     connections: { type: Array, default: () => [] },
     selectedConnectionId: { type: Number, default: null },
+    connectionMachiningPreview: { type: Object, default: null },
+    fastenerMachiningPreview: { type: Object, default: null },
+    fasteners: { type: Array, default: () => [] },
+    fastenerPreview: { type: Array, default: () => [] },
+    assemblyGeometryCache: { type: Object, default: null },
+    fastenerRowCopy: Boolean,
+    fastenerMode: Boolean,
+    selectedFastenerId: { type: Number, default: null },
 });
 
-const emit = defineEmits(['select-instance', 'open-instance-group', 'select-operation', 'select-connection', 'update-operation', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform', 'commit-group-move', 'blocked-group-move']);
+const emit = defineEmits(['select-instance', 'open-instance-group', 'select-operation', 'select-connection', 'connection-preview-rendered', 'fastener-preview-rendered', 'update-operation', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform', 'commit-group-move', 'blocked-group-move', 'pick-fastener-point', 'select-fastener']);
 const viewport = ref(null);
 const operationControls = ref(null);
 const anglePanelOpen = ref(false);
@@ -168,10 +178,11 @@ const editorAxisDirections = {
 };
 const palette = ['#b98552', '#c99b65', '#a87345', '#d0a878', '#98704c'];
 const objectMeshes = [];
+const fastenerMeshes = new Map();
 const operationHelpers = [];
 const lastPointerPosition = new THREE.Vector2();
 const geometryWorker = createGeometryWorkerClient();
-const assemblyGeometryWorker = createGeometryWorkerClient();
+const assemblyGeometryWorker = createGeometryWorkerClient(props.assemblyGeometryCache);
 let animationFrame;
 let camera;
 let controls;
@@ -294,11 +305,23 @@ const connectionPoint = (connection, role, mesh) => {
 const addConnectionMachiningPreview = (connection) => {
     if (!['pending', 'outdated'].includes(connection.machining_status)) return;
 
-    connectionOperationPlan(connection, props.parts).forEach(({ instance, operations, part }) => {
+    const plan = connection.type === 'mortise_tenon'
+        ? Object.values(props.connectionMachiningPreview?.parts ?? {}).map(entry => ({
+            instance: { id: entry.instance_id },
+            operations: entry.operations,
+        }))
+        : connectionOperationPlan(connection, props.parts);
+
+    addMachiningPreview(plan, connection.id);
+};
+
+const addMachiningPreview = (plan, connectionId = null) => {
+    plan.forEach(({ instance, operations }) => {
         const mesh = objectMeshes.find((candidate) => candidate.userData.instanceId === instance.id);
 
         if (!mesh || !mesh.visible) return;
 
+        const part = mesh.userData.part;
         mesh.updateWorldMatrix(true, false);
         operations.forEach((operation) => {
             const preview = operationPreviewObject(part, operation);
@@ -307,13 +330,14 @@ const addConnectionMachiningPreview = (connection) => {
 
             preview.applyMatrix4(mesh.matrixWorld);
             preview.material = new THREE.MeshBasicMaterial({
-                color: '#ef4444',
+                color: connectionId === null ? '#0891b2' : '#ef4444',
                 transparent: true,
                 opacity: 0.28,
                 depthWrite: false,
+                depthTest: connectionId !== null,
                 side: THREE.DoubleSide,
             });
-            preview.userData.connectionId = connection.id;
+            preview.userData.connectionId = connectionId;
             preview.userData.connectionPreview = true;
             preview.renderOrder = 5;
             connectionsGroup.add(preview);
@@ -362,30 +386,46 @@ const updateConnectionHelpers = () => {
 
         if (selected) addConnectionMachiningPreview(connection);
     });
+    if (props.fastenerMachiningPreview) {
+        addMachiningPreview(props.fastenerMachiningPreview.parts.map(entry => ({
+            instance: { id: entry.instance_id }, operations: entry.operations,
+        })));
+    }
+};
+
+const frameInspectionBounds = (bounds, direction, minimumRadius, minimumDistance) => {
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const radius = Math.max(size.length() / 2, minimumRadius);
+
+    controls.target.copy(center);
+    camera.position.copy(center).addScaledVector(direction, Math.max(radius * 2.6, minimumDistance));
+    camera.near = Math.max(radius / 100, 0.01);
+    camera.far = Math.max(radius * 100, 1000);
+    camera.updateProjectionMatrix();
+    controls.update();
 };
 
 const focusInstances = () => {
     if (props.mode !== 'assembly' || !camera || !controls || focusedInstanceIdSet.value.size === 0) return;
 
-    const meshes = objectMeshes.filter((mesh) => mesh.visible && focusedInstanceIdSet.value.has(mesh.userData.instanceId));
-
-    if (!meshes.length) return;
-
-    const bounds = meshes.reduce(
-        (box, mesh) => box.union(new THREE.Box3().setFromObject(mesh)),
-        new THREE.Box3(),
-    );
-    const center = bounds.getCenter(new THREE.Vector3());
-    const size = bounds.getSize(new THREE.Vector3());
-    const radius = Math.max(size.length() / 2, 0.35);
     const direction = camera.position.clone().sub(controls.target).normalize();
+    const fasteners = (props.focusedFasteners?.ids ?? []).flatMap(id => {
+        const object = fastenerMeshes.get(id)?.object;
+        return object?.parent?.visible ? [object] : [];
+    });
+    if (fasteners.length) {
+        const bounds = new THREE.Box3().setFromPoints(fasteners.map(object => object.getWorldPosition(new THREE.Vector3())));
+        const outward = new THREE.Vector3(0, -1, 0).transformDirection(fasteners[0].matrixWorld);
+        direction.addScaledVector(outward, Math.max(0, 0.55 - direction.dot(outward))).normalize();
+        frameInspectionBounds(bounds, direction, 0.18, 0.6);
+        return;
+    }
 
-    controls.target.copy(center);
-    camera.position.copy(center).addScaledVector(direction, Math.max(radius * 2.6, 1.4));
-    camera.near = Math.max(radius / 100, 0.01);
-    camera.far = Math.max(radius * 100, 1000);
-    camera.updateProjectionMatrix();
-    controls.update();
+    const meshes = objectMeshes.filter(mesh => mesh.visible && focusedInstanceIdSet.value.has(mesh.userData.instanceId));
+    if (!meshes.length) return;
+    const bounds = meshes.reduce((box, mesh) => box.union(new THREE.Box3().setFromObject(mesh)), new THREE.Box3());
+    frameInspectionBounds(bounds, direction, 0.35, 1.4);
 };
 
 const sectionNormal = () => ({
@@ -749,8 +789,45 @@ const createOperationPreviews = (part) => {
     }
 };
 
+const removeFastenerMesh = (key, entry) => {
+    entry.object.removeFromParent();
+    disposeSceneObjects([entry.object]);
+    fastenerMeshes.delete(key);
+};
+
+const syncFastenerMeshes = () => {
+    const sources = new Map(objectMeshes.map(mesh => [mesh.userData.instanceId, mesh]));
+    const displayed = new Set();
+    if (props.mode === 'assembly') {
+        const drillIds = new Set(props.fastenerMachiningPreview?.payload.fastener_ids);
+        const focusedIds = new Set(props.focusedFasteners?.ids);
+        const placements = [
+            ...props.fasteners.filter(item => !drillIds.has(item.id) && (item.id !== props.selectedFastenerId || !props.fastenerPreview.length))
+                .map(item => [item.id, item, false]),
+            ...props.fastenerPreview.map((item, index) => [`preview-${index}`, item, true]),
+        ];
+        for (const [key, item, preview] of placements) {
+            const source = sources.get(item.source_instance_id);
+            if (!source) continue;
+            displayed.add(key);
+            const part = source.userData.part;
+            const selected = props.selectedFastenerId === item.id;
+            const status = !preview && focusedIds.has(item.id) ? props.focusedFasteners.status : null;
+            const signature = JSON.stringify([item, part.dimensions, selected, status]);
+            const entry = fastenerMeshes.get(key);
+            if (entry?.object.parent === source && entry.signature === signature) continue;
+            if (entry) removeFastenerMesh(key, entry);
+            const object = createFastenerMesh(part, item, preview, selected, status);
+            source.add(object);
+            fastenerMeshes.set(key, { object, signature, preview });
+        }
+    }
+    fastenerMeshes.forEach((entry, key) => { if (!displayed.has(key)) removeFastenerMesh(key, entry); });
+};
+
 const clearObjects = () => {
     clearConnectionHelpers();
+    fastenerMeshes.forEach((entry, key) => removeFastenerMesh(key, entry));
     objectMeshes.splice(0);
     disposeSceneObjects(objectsGroup.children);
     objectsGroup.clear();
@@ -865,12 +942,14 @@ const rebuildAssembly = async () => {
     if (!objectsGroup) return;
 
     const currentVersion = ++assemblyRebuildVersion;
+    const fastenerPreview = props.fastenerMachiningPreview;
+    const machiningPreview = fastenerPreview ?? props.connectionMachiningPreview;
     assemblyGeometryWorker.cancelAll();
     const visibleParts = props.parts.filter((part) => part.instances?.length);
     const results = await Promise.all(visibleParts.map(async (part) => {
         try {
             const result = await assemblyGeometryWorker.calculate(part);
-            return { part, geometry: result.partGeometry ?? fallbackPartGeometry(part) };
+            return { part, geometry: result.partGeometry ?? fallbackPartGeometry(part), calculated: Boolean(result.partGeometry) };
         } catch (error) {
             if (error.name === 'AbortError') return { part, geometry: null };
 
@@ -893,6 +972,16 @@ const rebuildAssembly = async () => {
     });
     syncAssemblyMeshes();
     updateSection();
+
+    if (machiningPreview && machiningPreview === (props.fastenerMachiningPreview ?? props.connectionMachiningPreview)) {
+        const rendered = new Map(results.filter(result => result.calculated)
+            .flatMap(({ part }) => part.instances.map(instance => [instance.id, new Set(part.operations?.map(operation => operation.id))])));
+        const success = Object.values(machiningPreview.parts).every(entry => {
+            const ids = rendered.get(entry.instance_id);
+            return ids && entry.operations.every(operation => ids.has(operation.id)) && entry.replaces.every(id => !ids.has(id));
+        });
+        emit(fastenerPreview ? 'fastener-preview-rendered' : 'connection-preview-rendered', machiningPreview, success);
+    }
 
     if (props.mode === 'assembly' && props.focusRequestId > 0) {
         window.requestAnimationFrame(focusInstances);
@@ -933,6 +1022,7 @@ const syncAssemblyMeshes = () => {
     } else {
         applyExplodedPositions();
     }
+    syncFastenerMeshes();
 };
 
 const syncPartView = () => {
@@ -1448,6 +1538,34 @@ const pointerDown = (event) => {
     }
 
     controls.mouseButtons.LEFT = null;
+
+    if (props.mode === 'assembly' && props.fastenerMode && event.button === 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const selectable = objectMeshes.filter(mesh => mesh.visible && canPickInstance(mesh.userData.instanceId)
+            && !lockedInstanceIdSet.value.has(mesh.userData.instanceId));
+        const hit = raycaster.intersectObjects(selectable, false)[0];
+        const selectableSet = new Set(selectable);
+        const placed = props.fastenerRowCopy ? [] : [...fastenerMeshes.values()].filter(entry => !entry.preview && selectableSet.has(entry.object.parent));
+        const screw = raycaster.intersectObjects(placed.map(entry => entry.object), true)[0];
+        if (screw && screw.distance <= (hit?.distance ?? Infinity) + 0.001) {
+            emit('select-fastener', screw.object.userData.fastenerId);
+            return;
+        }
+        if (!hit?.face) return;
+        const part = hit.object.userData.part;
+        const face = grooveFaceFromNormal(hit.face.normal);
+        const frame = grooveFaceFrame(part, face);
+        const point = hit.object.worldToLocal(hit.point.clone()).sub(frame.center);
+        if (Math.abs(point.dot(frame.inward)) > 0.001) return;
+        emit('pick-fastener-point', {
+            source_instance_id: hit.object.userData.instanceId,
+            face,
+            center_u: Math.round(clamp((point.dot(frame.u) + frame.uSize / 2) / millimeterScale, 0, frame.uSize / millimeterScale) * 100) / 100,
+            center_v: Math.round(clamp((point.dot(frame.v) + frame.vSize / 2) / millimeterScale, 0, frame.vSize / millimeterScale) * 100) / 100,
+        });
+        return;
+    }
 
     if (props.mode === 'assembly' && props.measurementTool && event.button === 0) {
         const intersection = raycaster.intersectObjects(objectMeshes.filter(mesh => mesh.visible), false)[0];
@@ -2227,6 +2345,8 @@ watch(() => props.groupMoveInstanceIds.join(','), () => {
 watch(() => props.explodeDistance, applyExplodedPositions);
 watch(() => props.connections, updateConnectionHelpers, { deep: true });
 watch(() => props.selectedConnectionId, updateConnectionHelpers);
+watch(() => [props.connectionMachiningPreview, props.fastenerMachiningPreview], updateConnectionHelpers);
+watch(() => [props.mode, props.fasteners, props.fastenerPreview, props.selectedFastenerId, props.fastenerMachiningPreview, props.focusedFasteners], syncFastenerMeshes, { deep: true });
 watch(() => props.focusedInstanceIds, () => {
     objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === props.selectedInstanceId));
 }, { deep: true });

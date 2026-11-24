@@ -68,4 +68,9 @@ class Project extends Model
     {
         return $this->hasMany(ProjectEstimate::class);
     }
+
+    public function projectFasteners(): HasMany
+    {
+        return $this->hasMany(ProjectFastener::class);
+    }
 }

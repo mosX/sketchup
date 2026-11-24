@@ -2,6 +2,7 @@
 
 namespace App\Actions\Connections;
 
+use App\Exceptions\ProjectRevisionConflictException;
 use App\Models\PartDefinition;
 use App\Models\PartInstance;
 use App\Models\Project;
@@ -12,10 +13,14 @@ use Illuminate\Validation\ValidationException;
 
 class GenerateConnectionMachining
 {
-    public function handle(Project $project, ProjectConnection $connection): ProjectConnection
+    public function handle(Project $project, ProjectConnection $connection, ?int $expectedRevision = null): ProjectConnection
     {
-        return DB::transaction(function () use ($connection, $project): ProjectConnection {
-            $connection = ProjectConnection::query()->lockForUpdate()->findOrFail($connection->id);
+        return DB::transaction(function () use ($connection, $project, $expectedRevision): ProjectConnection {
+            $project = Project::query()->lockForUpdate()->findOrFail($project->id);
+            if ($expectedRevision !== null && $expectedRevision !== $project->revision) {
+                throw new ProjectRevisionConflictException($expectedRevision, $project->revision);
+            }
+            $connection = $project->projectConnections()->lockForUpdate()->findOrFail($connection->id);
 
             if (in_array($connection->machining_status, ['generated', 'not_required'], true)) {
                 return $connection;
@@ -72,10 +77,46 @@ class GenerateConnectionMachining
         }, attempts: 3);
     }
 
+    /**
+     * @return array{revision: int, parts: array<string, array<string, mixed>>}
+     */
+    public function preview(Project $project, ProjectConnection $connection): array
+    {
+        return DB::transaction(function () use ($project, $connection): array {
+            $project = Project::query()->lockForUpdate()->findOrFail($project->id);
+            $connection = $project->projectConnections()->findOrFail($connection->id);
+            if ($connection->type !== 'mortise_tenon' || ! in_array($connection->machining_status, ['pending', 'outdated'], true)) {
+                throw ValidationException::withMessages(['connection' => 'Для этого соединения пересчёт не требуется или предпросмотр пока недоступен.']);
+            }
+
+            $primary = $this->lockInstance($connection->primary_instance_id);
+            $secondary = $this->lockInstance($connection->secondary_instance_id);
+            $primaryPart = PartDefinition::query()->findOrFail($primary->part_definition_id);
+            $secondaryPart = PartDefinition::query()->findOrFail($secondary->part_definition_id);
+            $operations = $this->operationsForConnection($connection, $primaryPart, $secondaryPart);
+            $parts = [];
+
+            foreach (['primary' => [$primary, $primaryPart], 'secondary' => [$secondary, $secondaryPart]] as $role => [$instance, $part]) {
+                $replaces = collect($connection->generated_operation_ids ?? [])
+                    ->where('part_definition_id', $part->id)->pluck('operation_id')->all();
+                $this->ensureOperationLimit($part, count($operations[$role]), $replaces);
+                $parts[$role] = [
+                    'instance_id' => $instance->id,
+                    'part_id' => $part->id,
+                    'replaces' => $replaces,
+                    'operations' => $operations[$role],
+                ];
+            }
+
+            return ['revision' => $project->revision, 'parts' => $parts];
+        }, attempts: 3);
+    }
+
     public function reset(Project $project, ProjectConnection $connection): ProjectConnection
     {
         return DB::transaction(function () use ($connection, $project): ProjectConnection {
-            $connection = ProjectConnection::query()->lockForUpdate()->findOrFail($connection->id);
+            $project = Project::query()->lockForUpdate()->findOrFail($project->id);
+            $connection = $project->projectConnections()->lockForUpdate()->findOrFail($connection->id);
 
             if ($connection->machining_status === 'pending' && empty($connection->generated_operation_ids)) {
                 return $connection;
@@ -281,24 +322,25 @@ class GenerateConnectionMachining
         $primaryCenter = $this->connectionCenter($parameters, 'primary', $primarySurface);
         $secondaryCenter = $this->connectionCenter($parameters, 'secondary', $secondarySurface);
 
-        if (
-            $tenonWidth > min($primarySurface['u'], $secondarySurface['u'])
-            || $tenonThickness > min($primarySurface['v'], $secondarySurface['v'])
-            || $tenonLength > min($primarySurface['depth'], $secondarySurface['depth'])
-        ) {
-            throw ValidationException::withMessages([
-                'parameters' => 'Размеры шипа не помещаются на одной из выбранных граней.',
-            ]);
-        }
-
         if (abs($angle) > 0.001) {
             throw ValidationException::withMessages([
                 'parameters.joint_angle' => 'Поворот шипа пока не поддерживается. Измените его положение U/V или задайте угол 0°.',
             ]);
         }
 
-        $this->assertRectangleFits($primarySurface, $primaryCenter, $tenonWidth, $tenonThickness, 0);
-        $this->assertRectangleFits($secondarySurface, $secondaryCenter, $tenonWidth, $tenonThickness, 0);
+        foreach (['primary' => [$primaryPart, $primarySurface, $primaryCenter], 'secondary' => [$secondaryPart, $secondarySurface, $secondaryCenter]] as $role => [$part, $surface, $center]) {
+            $label = $role === 'primary' ? 'Шип' : 'Паз';
+            if ($tenonWidth > $surface['u'] || $tenonThickness > $surface['v'] || $tenonLength > $surface['depth']) {
+                throw ValidationException::withMessages([
+                    "parameters.{$role}" => "{$label} не помещается в заготовке «{$part->name}». Размер грани {$surface['u']} × {$surface['v']} мм, глубина {$surface['depth']} мм.",
+                ]);
+            }
+            $this->assertRectangleFits(
+                $surface, $center, $tenonWidth, $tenonThickness, 0,
+                "parameters.{$role}",
+                "{$label} выходит за край заготовки «{$part->name}». Сместите центр или уменьшите ширину или толщину шипа.",
+            );
+        }
 
         return [
             'primary' => $this->tenonWasteOperations($primarySurface, $primaryFace, $primaryCenter, $tenonWidth, $tenonThickness, $tenonLength),
@@ -413,7 +455,7 @@ class GenerateConnectionMachining
      * @param  array{u: float, v: float, depth: float}  $surface
      * @param  array{u: float, v: float}  $center
      */
-    private function assertRectangleFits(array $surface, array $center, float $length, float $width, float $angle): void
+    private function assertRectangleFits(array $surface, array $center, float $length, float $width, float $angle, string $field = 'parameters', ?string $message = null): void
     {
         $radians = deg2rad($angle);
         $extentU = abs(cos($radians)) * $length / 2 + abs(sin($radians)) * $width / 2;
@@ -426,14 +468,16 @@ class GenerateConnectionMachining
             || $surface['v'] < $center['v'] + $extentV
         ) {
             throw ValidationException::withMessages([
-                'parameters' => 'Область соединения выходит за выбранную грань. Измените положение, угол или размеры.',
+                $field => $message ?? 'Область соединения выходит за выбранную грань. Измените положение, угол или размеры.',
             ]);
         }
     }
 
-    private function ensureOperationLimit(PartDefinition $part, int $addedCount): void
+    /** @param array<int, string> $replaces */
+    private function ensureOperationLimit(PartDefinition $part, int $addedCount, array $replaces = []): void
     {
-        if (count($part->operations ?? []) + $addedCount > 50) {
+        $existing = collect($part->operations ?? [])->whereNotInStrict('id', $replaces)->count();
+        if ($existing + $addedCount > 50) {
             throw ValidationException::withMessages([
                 'operations' => "Для заготовки «{$part->name}» будет превышен предел в 50 операций.",
             ]);

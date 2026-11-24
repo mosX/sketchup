@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Actions\Connections\GenerateConnectionMachining;
 use App\Actions\Connections\UpdateProjectConnection as UpdateProjectConnectionAction;
+use App\Http\Requests\GenerateConnectionMachiningRequest;
 use App\Http\Requests\StoreProjectConnectionRequest;
 use App\Http\Requests\UpdateProjectConnectionRequest;
 use App\Http\Resources\ProjectConnectionResource;
@@ -64,15 +65,27 @@ class ProjectConnectionController extends Controller
     }
 
     public function generateMachining(
+        GenerateConnectionMachiningRequest $request,
         Project $project,
         ProjectConnection $projectConnection,
         GenerateConnectionMachining $generateConnectionMachining,
     ): ProjectConnectionResource {
-        Gate::authorize('update', $project);
-
         return new ProjectConnectionResource(
-            $generateConnectionMachining->handle($project, $projectConnection)
+            $generateConnectionMachining->handle(
+                $project, $projectConnection,
+                $request->has('expected_revision') ? $request->integer('expected_revision') : null,
+            )
         );
+    }
+
+    public function previewMachining(
+        Project $project,
+        ProjectConnection $projectConnection,
+        GenerateConnectionMachining $generateConnectionMachining,
+    ): JsonResponse {
+        Gate::authorize('view', $project);
+
+        return response()->json(['data' => $generateConnectionMachining->preview($project, $projectConnection)]);
     }
 
     public function removeMachining(

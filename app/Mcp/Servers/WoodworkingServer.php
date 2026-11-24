@@ -224,6 +224,21 @@ class WoodworkingServer extends Server
                 ],
             ),
             new WoodworkingApiTool(
+                'woodworking_preview_connection_machining',
+                'Preview pending or outdated mortise-and-tenon machining on both parts without saving. Pass the returned revision as expected_revision when applying.',
+                'GET',
+                '/projects/{project_id}/connections/{connection_id}/machining/preview',
+                [
+                    'type' => 'object',
+                    'properties' => [
+                        'project_id' => ['type' => 'integer', 'minimum' => 1],
+                        'connection_id' => ['type' => 'integer', 'minimum' => 1],
+                    ],
+                    'required' => ['project_id', 'connection_id'],
+                    'additionalProperties' => false,
+                ],
+            ),
+            new WoodworkingApiTool(
                 'woodworking_generate_connection_machining',
                 'Generate applied machining operations for both parts of a semantic connection. Shared part definitions are split automatically.',
                 'POST',
@@ -233,6 +248,7 @@ class WoodworkingServer extends Server
                     'properties' => [
                         'project_id' => ['type' => 'integer', 'minimum' => 1],
                         'connection_id' => ['type' => 'integer', 'minimum' => 1],
+                        'expected_revision' => ['type' => 'integer', 'minimum' => 1],
                     ],
                     'required' => ['project_id', 'connection_id'],
                     'additionalProperties' => false,

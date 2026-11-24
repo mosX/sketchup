@@ -212,6 +212,21 @@ const plungeRoutePreview = (part, operation) => {
 const drillCutter = (part, operation) => {
     const placement = drillPlacement(part, operation);
     const epsilon = 0.004;
+    if (operation.bottom_diameter != null) {
+        const bottom = Number(operation.bottom_diameter) * millimeterScale / 2;
+        const slope = (placement.radius - bottom) / placement.depth;
+        const entrance = Math.min(epsilon, placement.depth / 10);
+        const exit = operation.through ? Math.min(epsilon, bottom / slope / 2) : 0;
+        const cone = new Brush(new THREE.CylinderGeometry(
+            bottom - exit * slope,
+            placement.radius + entrance * slope,
+            placement.depth + entrance + exit,
+            40,
+        ));
+        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), placement.frame.inward);
+        cone.position.copy(placement.surfacePoint).addScaledVector(placement.frame.inward, (placement.depth - entrance + exit) / 2);
+        return cone;
+    }
     const cylinder = new Brush(new THREE.CylinderGeometry(
         placement.radius,
         placement.radius,
