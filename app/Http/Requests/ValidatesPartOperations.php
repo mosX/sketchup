@@ -6,6 +6,10 @@ use Illuminate\Validation\Validator;
 
 trait ValidatesPartOperations
 {
+    use ValidatesAdvancedMachining;
+
+    private const string StockEdges = 'top_left,top_right,bottom_left,bottom_right,top_start,top_end,bottom_start,bottom_end,start_left,start_right,end_left,end_right';
+
     /**
      * @return array<string, array<mixed>>
      */
@@ -14,7 +18,7 @@ trait ValidatesPartOperations
         return [
             $attribute => ['sometimes', 'array', 'max:50'],
             "{$attribute}.*.id" => ['sometimes', 'string', 'max:100'],
-            "{$attribute}.*.type" => ['required', 'string', 'in:cross_cut,rip_cut,groove,edge_roundover,plunge_route,drill'],
+            "{$attribute}.*.type" => ['required', 'string', 'in:cross_cut,rip_cut,groove,edge_roundover,plunge_route,drill,rabbet,pocket,edge_chamfer,jigsaw_cut,'.implode(',', self::AdvancedMachiningTypes)],
             "{$attribute}.*.status" => ['sometimes', 'string', 'in:draft,applied'],
             "{$attribute}.*.enabled" => ['sometimes', 'boolean'],
             "{$attribute}.*.position" => ['sometimes', 'numeric', 'min:0', 'max:100000'],
@@ -39,7 +43,7 @@ trait ValidatesPartOperations
             "{$attribute}.*.width" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.depth" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.blade_diameter" => ['sometimes', 'numeric', 'min:1', 'max:2000'],
-            "{$attribute}.*.edge" => ['sometimes', 'string', 'in:top_left,top_right,bottom_left,bottom_right,top_start,top_end,bottom_start,bottom_end,start_left,start_right,end_left,end_right'],
+            "{$attribute}.*.edge" => ['sometimes', 'string', 'in:'.self::StockEdges],
             "{$attribute}.*.radius" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.route_mode" => ['sometimes', 'string', 'in:point,path'],
             "{$attribute}.*.start_u" => ['sometimes', 'numeric', 'min:0', 'max:100000'],
@@ -51,6 +55,15 @@ trait ValidatesPartOperations
             "{$attribute}.*.diameter" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.bottom_diameter" => ['sometimes', 'numeric', 'min:0.1', 'max:10000'],
             "{$attribute}.*.through" => ['sometimes', 'boolean'],
+            "{$attribute}.*.cut_length" => ['sometimes', 'numeric', 'between:0.1,100000'],
+            "{$attribute}.*.pocket_shape" => ['sometimes', 'string', 'in:rectangle,circle'],
+            "{$attribute}.*.pocket_length" => ['sometimes', 'numeric', 'between:0.1,100000'],
+            "{$attribute}.*.corner_radius" => ['sometimes', 'numeric', 'between:0,10000'],
+            "{$attribute}.*.points" => ['sometimes', 'array', 'list', 'min:2', 'max:64'],
+            "{$attribute}.*.points.*" => ['required', 'array:u,v'],
+            "{$attribute}.*.points.*.u" => ['required', 'numeric', 'between:-100000,200000'],
+            "{$attribute}.*.points.*.v" => ['required', 'numeric', 'between:-100000,200000'],
+            ...$this->advancedMachiningRules("{$attribute}.*"),
         ];
     }
 
@@ -196,7 +209,179 @@ trait ValidatesPartOperations
             if ($operation['type'] === 'drill') {
                 $this->validateDrill($validator, $operation, $length, $width, $thickness, $field, $require);
             }
+
+            if (in_array($operation['type'], ['rabbet', 'pocket', 'edge_chamfer', 'jigsaw_cut'], true)) {
+                $this->validateShaping($validator, $operation, $length, $width, $thickness, $field, $require);
+            }
+            if (in_array($operation['type'], self::AdvancedMachiningTypes, true)) {
+                $this->validateAdvancedMachining($validator, $operation, $length, $width, $thickness, $field, $require);
+            }
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $operation
+     * @param  callable(string): string  $field
+     * @param  callable(list<string>): bool  $require
+     */
+    private function validateShaping(Validator $validator, array $operation, float $length, float $width, float $thickness, callable $field, callable $require): void
+    {
+        $type = $operation['type'];
+        $required = match ($type) {
+            'rabbet' => ['edge', 'face', 'start', 'cut_length', 'width', 'depth'],
+            'edge_chamfer' => ['edge', 'width'],
+            'pocket' => ['face', 'pocket_shape', 'center_u', 'center_v', 'depth', ...(($operation['pocket_shape'] ?? null) === 'circle' ? ['diameter'] : ['pocket_length', 'width'])],
+            'jigsaw_cut' => ['face', 'points'],
+        };
+        if (! $require($required) || $validator->errors()->hasAny(array_map($field, $required))) {
+            return;
+        }
+
+        $normal = ['top' => $thickness, 'bottom' => $thickness, 'left' => $width, 'right' => $width, 'start' => $length, 'end' => $length];
+        if ($type === 'edge_chamfer' || $type === 'rabbet') {
+            $sides = explode('_', $operation['edge']);
+            [$sideA, $sideB] = $sides;
+            $axisSize = match ($sideA) {
+                'start', 'end' => $thickness,
+                default => in_array($sideB, ['left', 'right'], true) ? $length : $width,
+            };
+            if ($type === 'edge_chamfer') {
+                if ((float) $operation['width'] >= min($normal[$sideA], $normal[$sideB])) {
+                    $validator->errors()->add($field('width'), 'Фаска слишком широкая для выбранной кромки.');
+                }
+
+                return;
+            }
+            $face = $operation['face'];
+            if (! in_array($face, $sides, true)) {
+                $validator->errors()->add($field('face'), 'Для четверти выберите грань, примыкающую к кромке.');
+
+                return;
+            }
+            $across = $face === $sideA ? $sideB : $sideA;
+            if ((float) $operation['width'] >= $normal[$across]) {
+                $validator->errors()->add($field('width'), 'Ширина четверти должна быть меньше размера заготовки по грани.');
+            }
+            if ((float) $operation['depth'] >= $normal[$face]) {
+                $validator->errors()->add($field('depth'), 'Глубина четверти должна быть меньше размера заготовки по нормали грани.');
+            }
+            if ((float) $operation['start'] + (float) $operation['cut_length'] > $axisSize + 1e-8) {
+                $validator->errors()->add($field('cut_length'), 'Выборка выходит за конец выбранной кромки.');
+            }
+
+            return;
+        }
+
+        [$surfaceU, $surfaceV] = match ($operation['face']) {
+            'left', 'right' => [$length, $thickness],
+            'start', 'end' => [$width, $thickness],
+            default => [$length, $width],
+        };
+        if ($type === 'jigsaw_cut') {
+            $points = $operation['points'];
+            foreach ($points as $index => $point) {
+                if ($validator->errors()->hasAny([$field("points.$index"), $field("points.$index.u"), $field("points.$index.v")])) {
+                    return;
+                }
+            }
+            $vertices = array_map(fn (array $point): array => [(float) $point['u'], (float) $point['v']], $points);
+            if (! $this->validJigsawContour($vertices, $surfaceU, $surfaceV)) {
+                $validator->errors()->add($field('points'), 'Контур должен быть замкнутым, без пересечений и удалять только часть грани.');
+            }
+
+            return;
+        }
+
+        $circular = $operation['pocket_shape'] === 'circle';
+        $sizeU = (float) ($circular ? $operation['diameter'] : $operation['pocket_length']);
+        $sizeV = (float) ($circular ? $operation['diameter'] : $operation['width']);
+        foreach (['center_u' => [$sizeU, $surfaceU], 'center_v' => [$sizeV, $surfaceV]] as $key => [$size, $limit]) {
+            $center = (float) $operation[$key];
+            if ($center <= $size / 2 || $center >= $limit - $size / 2) {
+                $validator->errors()->add($field($key), 'Карман должен целиком помещаться внутри выбранной грани.');
+            }
+        }
+        if ((float) $operation['depth'] >= $normal[$operation['face']]) {
+            $validator->errors()->add($field('depth'), 'У кармана должно оставаться дно.');
+        }
+        if (! $circular && is_numeric($operation['corner_radius'] ?? null) && (float) $operation['corner_radius'] > min($sizeU, $sizeV) / 2) {
+            $validator->errors()->add($field('corner_radius'), 'Радиус угла слишком большой для этого кармана.');
+        }
+    }
+
+    /** @param list<array{float, float}> $points */
+    private function isSimpleMachiningPath(array $points, bool $closed): bool
+    {
+        $count = count($points);
+        if ($count < ($closed ? 3 : 2)) {
+            return false;
+        }
+        $segments = $count - ($closed ? 0 : 1);
+        $cross = fn (array $a, array $b, array $c): float => ($b[0] - $a[0]) * ($c[1] - $a[1]) - ($b[1] - $a[1]) * ($c[0] - $a[0]);
+        $turn = function (array $a, array $b, array $c) use ($cross): int {
+            $value = $cross($a, $b, $c);
+
+            return abs($value) <= 1e-8 ? 0 : ($value <=> 0);
+        };
+        $on = fn (array $p, array $a, array $b): bool => $p[0] >= min($a[0], $b[0]) - 1e-8 && $p[0] <= max($a[0], $b[0]) + 1e-8
+            && $p[1] >= min($a[1], $b[1]) - 1e-8 && $p[1] <= max($a[1], $b[1]) + 1e-8;
+        for ($index = 0; $index < $segments; $index++) {
+            [$a, $b] = [$points[$index], $points[($index + 1) % $count]];
+            $c = $closed ? $points[($index + 2) % $count] : ($points[$index + 2] ?? null);
+            if (hypot($a[0] - $b[0], $a[1] - $b[1]) < 0.001
+                || ($c !== null && $turn($a, $b, $c) === 0 && ($a[0] - $b[0]) * ($c[0] - $b[0]) + ($a[1] - $b[1]) * ($c[1] - $b[1]) > 0)) {
+                return false;
+            }
+            for ($other = $index + 2; $other < $segments; $other++) {
+                if ($closed && $index === 0 && $other === $segments - 1) {
+                    continue;
+                }
+                [$c, $d] = [$points[$other], $points[($other + 1) % $count]];
+                [$abc, $abd, $cda, $cdb] = [$turn($a, $b, $c), $turn($a, $b, $d), $turn($c, $d, $a), $turn($c, $d, $b)];
+                if (($abc * $abd < 0 && $cda * $cdb < 0) || ($abc === 0 && $on($c, $a, $b)) || ($abd === 0 && $on($d, $a, $b))
+                    || ($cda === 0 && $on($a, $c, $d)) || ($cdb === 0 && $on($b, $c, $d))) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /** @param list<array{float, float}> $points */
+    private function validJigsawContour(array $points, float $u, float $v): bool
+    {
+        if (! $this->isSimpleMachiningPath($points, true)) {
+            return false;
+        }
+        $clipped = $points;
+        foreach ([[0, 0.0, 1], [0, $u, -1], [1, 0.0, 1], [1, $v, -1]] as [$axis, $boundary, $sign]) {
+            $next = [];
+            $count = count($clipped);
+            for ($index = 0; $index < $count; $index++) {
+                $a = $clipped[$index];
+                $b = $clipped[($index + 1) % $count];
+                $here = ($a[$axis] - $boundary) * $sign;
+                $there = ($b[$axis] - $boundary) * $sign;
+                if ($here >= 0) {
+                    $next[] = $a;
+                }
+                if (($here < 0 && $there > 0) || ($here > 0 && $there < 0)) {
+                    $fraction = $here / ($here - $there);
+                    $next[] = [$a[0] + ($b[0] - $a[0]) * $fraction, $a[1] + ($b[1] - $a[1]) * $fraction];
+                }
+            }
+            $clipped = $next;
+        }
+
+        $doubledArea = 0;
+        $cross = fn (array $a, array $b, array $c): float => ($b[0] - $a[0]) * ($c[1] - $a[1]) - ($b[1] - $a[1]) * ($c[0] - $a[0]);
+        for ($index = 1; $index < count($clipped) - 1; $index++) {
+            $doubledArea += $cross($clipped[0], $clipped[$index], $clipped[$index + 1]);
+        }
+        $area = abs($doubledArea) / 2;
+
+        return $area > 0.00005 && $area < $u * $v - 0.00005;
     }
 
     /**

@@ -1,6 +1,8 @@
 import { normalizeOperations } from './operations/catalog.js';
 import { createScriptTransforms } from './scriptTransforms.js';
 import { surfaceDimensions } from './operations/shared.js';
+import { faceAxes, rabbetAxes } from './operations/shaping.js';
+import { advancedTools, resizeAdvanced } from './operations/advancedMachining.js';
 
 const { rotation } = createScriptTransforms();
 const axes = ['x', 'y', 'z'];
@@ -14,6 +16,10 @@ const operationMeasurements = {
     edge_roundover: ['radius'],
     plunge_route: ['start_u', 'start_v', 'travel_length', 'cutter_diameter', 'depth'],
     drill: ['center_u', 'center_v', 'diameter', 'bottom_diameter', 'depth'],
+    rabbet: ['start', 'cut_length', 'width', 'depth'],
+    pocket: ['center_u', 'center_v', 'pocket_length', 'width', 'diameter', 'corner_radius', 'depth'],
+    edge_chamfer: ['width'],
+    jigsaw_cut: [],
 };
 
 export const scaleFactorFromPointer = (start, current, pivot, axisConstrained = false) => {
@@ -54,10 +60,20 @@ export const scaleAssemblyPose = ({ part, instance }, pivot, axis, factor) => {
 };
 
 const resizeOperation = (operation, factors, before, after) => {
+    if (Object.hasOwn(advancedTools, operation.type)) return resizeAdvanced(operation, before, after);
     const [length, width, thickness] = factors;
     const measure = (field, factor) => {
         if (operation[field] != null) operation[field] = Number((Number(operation[field]) * factor).toFixed(6));
     };
+    if (operation.type === 'jigsaw_cut') {
+        const original = surfaceDimensions(operation.face, before);
+        const resized = surfaceDimensions(operation.face, after);
+        operation.points = operation.points.map(({ u, v }) => ({
+            u: Number((Number(u) * resized.u / original.u).toFixed(6)),
+            v: Number((Number(v) * resized.v / original.v).toFixed(6)),
+        }));
+        return operation;
+    }
     if (length === width && width === thickness) {
         for (const field of operationMeasurements[operation.type] ?? []) measure(field, length);
         return operation;
@@ -82,7 +98,20 @@ const resizeOperation = (operation, factors, before, after) => {
         return operation;
     }
 
-    if (['drill', 'groove', 'plunge_route'].includes(operation.type)) {
+    const localScale = key => Number(after[key]) / Number(before[key]);
+    if (operation.type === 'rabbet') {
+        const axes = rabbetAxes(operation.edge, operation.face);
+        measure('start', localScale(axes.length));
+        measure('cut_length', localScale(axes.length));
+        measure('width', localScale(axes.width));
+        measure('depth', localScale(axes.depth));
+        return operation;
+    }
+    if (operation.type === 'edge_chamfer') {
+        measure('width', Math.min(...operation.edge.split('_').map(face => localScale(faceAxes[face]))));
+        return operation;
+    }
+    if (['drill', 'groove', 'plunge_route', 'pocket'].includes(operation.type)) {
         const original = surfaceDimensions(operation.face, before);
         const resized = surfaceDimensions(operation.face, after);
         const u = resized.u / original.u;
@@ -91,6 +120,12 @@ const resizeOperation = (operation, factors, before, after) => {
         for (const field of ['center_u', 'start_u']) measure(field, u);
         for (const field of ['center_v', 'start_v']) measure(field, v);
         measure('depth', normal);
+        if (operation.type === 'pocket') {
+            measure('pocket_length', u);
+            measure('width', v);
+            measure('diameter', Math.min(u, v));
+            measure('corner_radius', Math.min(u, v));
+        }
         if (operation.through) operation.depth = resized.depth;
         if (operation.path_angle != null && operation.route_mode !== 'point') {
             const radians = Number(operation.path_angle) * Math.PI / 180;
@@ -115,7 +150,7 @@ export const planAssemblyScale = (members, pivot, axis, factor) => {
         if (!variants.has(key)) {
             const resized = Object.fromEntries(dimensions.map((key, i) => [key, size[i]]));
             const operations = normalizeOperations(part).map(operation => {
-                if (!Object.hasOwn(operationMeasurements, operation.type)) throw new Error('У заготовки есть операция, которую нельзя масштабировать.');
+                if (!Object.hasOwn(operationMeasurements, operation.type) && !Object.hasOwn(advancedTools, operation.type)) throw new Error('У заготовки есть операция, которую нельзя масштабировать.');
                 return resizeOperation(operation, factors, part.dimensions, resized);
             });
             variants.set(key, {

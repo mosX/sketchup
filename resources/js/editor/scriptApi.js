@@ -99,11 +99,21 @@ export function createScriptApi(parameterValues = {}) {
             drill(parameters = {}) { const s = surface(parameters); return handle.operation('drill', { face: s.face, center_u: s.u / 2, center_v: s.v / 2, diameter: Math.min(8, s.u, s.v), depth: parameters.through ? s.depth : Math.min(18, s.depth), through: false, ...parameters }); },
             groove(parameters = {}) { const s = surface(parameters); return handle.operation('groove', { face: s.face, center_u: s.u / 2, center_v: s.v / 2, path_angle: 0, groove_length: s.u, width: Math.min(8, s.v), depth: Math.min(6, s.depth), blade_diameter: 190, ...parameters }); },
             roundover(parameters = {}) { return handle.operation('edge_roundover', { edge: 'top_left', radius: Math.min(4, command.data.width / 2, command.data.thickness / 2), ...parameters }); },
+            rabbet(parameters) { return handle.operation('rabbet', parameters); },
+            pocket(parameters) { return handle.operation('pocket', parameters); },
+            chamfer(parameters) { return handle.operation('edge_chamfer', parameters); },
+            jigsawCut(parameters) { return handle.operation('jigsaw_cut', parameters); },
+            drillRow(parameters) { return handle.operation('drill_row', parameters); },
+            pocketScrew(parameters) { return handle.operation('pocket_screw', parameters); },
+            curveRoute(parameters) { return handle.operation('curve_route', parameters); },
+            taper(parameters) { return handle.operation('taper', parameters); },
+            turn(parameters) { return handle.operation('turning', parameters); },
             crossCut(parameters = {}) { return handle.operation('cross_cut', { position: command.data.length * 0.9, miter_angle: 0, bevel_angle: 0, kerf: 3.2, cut_depth: command.data.thickness, cut_direction: 'top_down', keep_side: 'start', ...parameters }); },
             ripCut(parameters = {}) { return handle.operation('rip_cut', { reference_side: 'left', start_offset: command.data.width / 4, end_offset: command.data.width / 4, bevel_angle: 0, kerf: 3.2, cut_depth: command.data.thickness, cut_direction: 'top_down', keep_side: 'opposite', ...parameters }); },
             plungeRoute(parameters = {}) { const s = surface(parameters); return handle.operation('plunge_route', { face: s.face, route_mode: 'point', start_u: s.u / 2, start_v: s.v / 2, path_angle: 0, travel_length: 0, cutter_profile: 'straight', cutter_angle: 0, cutter_diameter: Math.min(8, s.u, s.v), depth: Math.min(6, s.depth), ...parameters }); },
             operation(type, parameters = {}) {
-                if (!['cross_cut', 'rip_cut', 'groove', 'edge_roundover', 'plunge_route', 'drill'].includes(type)) throw new Error(`Unknown operation: ${type}`);
+                if (!['cross_cut', 'rip_cut', 'groove', 'edge_roundover', 'plunge_route', 'drill', 'rabbet', 'pocket', 'edge_chamfer', 'jigsaw_cut',
+                    'drill_row', 'pocket_screw', 'curve_route', 'taper', 'turning'].includes(type)) throw new Error(`Unknown operation: ${type}`);
                 if (command.data.operations.length >= 50) throw new Error('Limit: 50 operations per part.');
                 if (++operationCount > 100) throw new Error('Limit: 100 machining operations per script.');
                 command.data.operations.push({ ...parameters, id: `operation_${operationCount}`, type, status: 'applied' });
@@ -181,12 +191,18 @@ export function createScriptApi(parameterValues = {}) {
         setWorld(entryFor(copy), { matrix: math.multiply(matrix, pose.matrix), position: math.add(pivot, math.apply(matrix, math.add(pose.position, math.scale(pivot, -1)))) });
         return copy;
     };
-    const parameter = (name, { label = name, default: defaultValue, min = -100000, max = 100000, step = 1 } = {}) => {
+    const parameter = (name, { label = name, default: defaultValue, min = -100000, max = 100000, step = 1, kind = 'number', unit, diameterParameter, lengthParameter } = {}) => {
         if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name) || parameters.some(item => item.name === name)) throw new Error('Parameter names must be unique English identifiers.');
         if (parameters.length >= 30 || ![defaultValue, min, max, step].every(Number.isFinite) || min > max || step <= 0) throw new Error('Invalid parameter definition (maximum 30).');
         const value = Object.hasOwn(parameterValues, name) ? parameterValues[name] : defaultValue;
         if (!Number.isFinite(value) || value < min || value > max) throw new Error(`Parameter ${name} must be between ${min} and ${max}.`);
-        parameters.push({ name, label: String(label).slice(0, 100), default: defaultValue, min, max, step, value });
+        if (!['number', 'screw', 'hidden'].includes(kind)) throw new Error('Unknown parameter kind.');
+        parameters.push({
+            name, label: String(label).slice(0, 100), default: defaultValue, min, max, step, value,
+            ...(kind !== 'number' ? { kind } : {}),
+            ...(unit ? { unit: String(unit).slice(0, 12) } : {}),
+            ...(kind === 'screw' ? { diameterParameter, lengthParameter } : {}),
+        });
         return value;
     };
     const connect = (primary, secondary, { type = 'butt', label = '', note = null, is_verified = false, ...parameters } = {}) => {
@@ -310,6 +326,87 @@ assemblyStep("Fit the lid", {
     // Add fasteners: [screws] after selecting a catalog ID.
 });
 render({ wood: "pine", finish: "oil", light: "studio", exposure: -0.5 });`;
+
+export const parametricBoxScript = `// Outer dimensions in mm. The lid lifts off with two locating cleats.
+const length = parameter("length", { label: "Длина", default: 630, min: 250, max: 1200, unit: "мм" });
+const width = parameter("width", { label: "Ширина", default: 430, min: 180, max: 800, unit: "мм" });
+const height = parameter("height", { label: "Высота", default: 240, min: 120, max: 550, unit: "мм" });
+const thickness = parameter("thickness", { label: "Толщина доски", default: 18, min: 14, max: 30, unit: "мм" });
+const screwId = parameter("screwId", { label: "Шуруп из каталога", default: 0, min: 0, max: 100000, kind: "screw", diameterParameter: "screwDiameter", lengthParameter: "screwLength" });
+const screwDiameter = parameter("screwDiameter", { default: 3.5, min: 3, max: 5, kind: "hidden" });
+const screwLength = parameter("screwLength", { default: 35, min: 1, max: 1000, kind: "hidden" });
+
+const wallHeight = height - 2 * thickness;
+const innerWidth = width - 2 * thickness;
+const minScrewLength = thickness + 6;
+const maxScrewLength = thickness + Math.min(40, wallHeight - 10);
+if (screwId && (screwLength < minScrewLength || screwLength > maxScrewLength)) {
+    throw new Error("Для этих размеров нужен шуруп длиной " + minScrewLength + "–" + maxScrewLength + " мм.");
+}
+const box = group("Деревянный ящик");
+const shell = group("Корпус", box);
+const cover = group("Съёмная крышка", box);
+const board = (name, length, width, depth = thickness) => part(name, { length, width, thickness: depth, material: "Сосна" });
+const baseBoard = board("Дно", length, width);
+const longBoard = board("Продольная стенка", length, wallHeight);
+const endBoard = board("Торцевая стенка", innerWidth, wallHeight);
+const base = shell.add(baseBoard, { position: [0, 0, thickness / 2] });
+const wallZ = height / 2;
+const front = shell.add(longBoard, { position: [0, -(width - thickness) / 2, wallZ], rotation: [90, 0, 0] });
+const back = shell.add(longBoard, { position: [0, (width - thickness) / 2, wallZ], rotation: [90, 0, 0] });
+const left = shell.add(endBoard, { position: [-(length - thickness) / 2, 0, wallZ], rotation: [90, 0, 90] });
+const right = shell.add(endBoard, { position: [(length - thickness) / 2, 0, wallZ], rotation: [90, 0, 90] });
+const lid = cover.add(board("Крышка", length, width), { position: [0, 0, height - thickness / 2] });
+const cleatBoard = board("Упор крышки", innerWidth - 4, 28, 12);
+const cleats = [-1, 1].map(side => cover.add(cleatBoard, {
+    position: [side * (length / 2 - thickness - 16), 0, height - thickness - 6], rotation: [0, 0, 90]
+}));
+
+const round = value => Math.round(value * 100) / 100;
+const clearance = round(screwDiameter + 0.5);
+const edge = Math.min(30, wallHeight / 4);
+const cornerScrews = [];
+const bottomScrews = [];
+const pilot = {
+    clearance_diameter: clearance, pilot: true,
+    pilot_diameter: round(screwDiameter * 0.65), pilot_depth: Math.min(36, screwLength - thickness + 1)
+};
+const prepare = (list, source, target, definition, face, u, v, axis, spacing, drawHoles) => {
+    const placement = { face, center_u: round(u), center_v: round(v), count: 2, row_axis: axis, spacing: round(spacing) };
+    if (screwId) {
+        list.push(fastener(source, { ...placement, target, catalog_material_id: screwId }).prepareDrilling(pilot));
+    } else if (drawHoles) {
+        for (let index = 0; index < placement.count; index++) {
+            definition.drill({ face, through: true, diameter: clearance,
+                center_u: round(u + (axis === "u" ? index * spacing : 0)),
+                center_v: round(v + (axis === "v" ? index * spacing : 0)) });
+        }
+    }
+};
+for (const [panel, face] of [[front, "top"], [back, "bottom"]]) {
+    for (const [end, u] of [[left, thickness / 2], [right, length - thickness / 2]]) {
+        prepare(cornerScrews, panel, end, longBoard, face, u, edge, "v", wallHeight - 2 * edge, panel === front);
+        connect(panel, end, { type: "butt" });
+    }
+}
+for (const [panel, v] of [[back, thickness / 2], [front, width - thickness / 2]]) {
+    prepare(bottomScrews, base, panel, baseBoard, "bottom", length / 3, v, "u", length / 3, true);
+}
+for (const [panel, u] of [[left, thickness / 2], [right, length - thickness / 2]]) {
+    prepare(bottomScrews, base, panel, baseBoard, "bottom", u, width / 3, "v", width / 3, true);
+}
+
+const target = [0, 0, height / 2];
+assemblyStep("Соберите стенки", { parts: [front, back, left, right], fasteners: cornerScrews,
+    instruction: "Торцевые стенки входят между продольными. Выровняйте верхние кромки и проверьте диагонали.",
+    camera: { position: [length, -width * 1.4, height * 2], target } });
+assemblyStep("Закрепите дно", { parts: [base], highlight: [base, front, back], fasteners: bottomScrews,
+    instruction: "Совместите дно с наружными кромками стенок. Крепите снизу.",
+    camera: { position: [length, -width * 1.5, -height * 1.25], target } });
+assemblyStep("Соберите съёмную крышку", { parts: [lid, ...cleats], highlight: [lid, ...cleats],
+    instruction: "Приклейте два упора к нижней стороне крышки. С каждой стороны оставьте 2 мм зазора до стенок.",
+    camera: { position: [length, -width * 1.6, height * 2.5], target } });
+render({ wood: "pine", finish: "raw", light: "studio" });`;
 
 export const starterScript = `// Millimeters, degrees. X/Y = floor, Z = height.
 // Part: length along X, width along Y, thickness along Z.

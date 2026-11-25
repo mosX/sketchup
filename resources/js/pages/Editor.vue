@@ -40,7 +40,8 @@
             <details class="workspace-menu" @keydown.esc="$event.currentTarget.open = false">
                 <summary class="button-secondary button-compact">Ещё <span aria-hidden="true">⌄</span></summary>
                 <div class="workspace-menu-items" @click="$event.currentTarget.parentElement.open = false">
-                    <button type="button" @click="openScriptEditor">Сценарии · JavaScript</button>
+                    <button type="button" @click="openScriptEditor('dimensions')">Размеры изделия</button>
+                    <button type="button" @click="openScriptEditor()">Сценарии · JavaScript</button>
                     <button type="button" @click="showVersions = true">Версии проекта</button>
                     <button type="button" @click="startAssemblyGuide">Сборка по шагам</button>
                     <button type="button" @click="openTemplateCreator">Сохранить как шаблон</button>
@@ -225,6 +226,7 @@
                     :mode="editorMode"
                     :parts="connectionViewportParts"
                     :active-part="partPreview"
+                    :drawing-contour="drawingContour"
                     :part-context-instance="partContextInstance"
                     :part-context-visible-instance-ids="partContextVisibleInstanceIds"
                     :selected-instance-id="selectedInstanceId"
@@ -271,6 +273,7 @@
                     @commit-connection-parameters="commitConnectionParametersFromScene"
                     @select-operation="selectedOperationId = $event"
                     @update-operation="updateOperationFromScene"
+                    @add-chamfer-edge="addChamferEdge"
                     @commit-instance-transform="commitInstanceTransform"
                     @commit-group-move="commitGroupMove"
                     @blocked-group-move="groupMoveError = $event"
@@ -346,6 +349,13 @@
                         <div class="operation-add-grid">
                             <button v-for="tool in operationTools" :key="tool.type" type="button" :title="tool.label" :aria-label="tool.label" @click="addOperation(tool.type)"><span aria-hidden="true">{{ tool.icon }}</span>{{ tool.caption }}</button>
                         </div>
+                        <div v-if="drillRowClipboard" class="mt-2 flex flex-wrap gap-1.5">
+                            <button class="button-secondary button-compact" type="button" @click="pasteDrillRow">Вставить ряд отверстий</button>
+                            <select v-model="drillRowMirror" class="rounded-md border border-stone-200 bg-white px-1 text-xs" aria-label="Зеркальность ряда">
+                                <option value="">Прямо</option><option value="u">Зеркально U</option><option value="v">Зеркально V</option>
+                            </select>
+                        </div>
+                        <p v-if="partOperationError" class="mt-2 text-xs text-red-700" role="alert">{{ partOperationError }}</p>
 
                         <div class="operation-section-label">
                             <span>Текущие операции</span>
@@ -551,6 +561,25 @@
                                 <input v-scrub-number :value="selectedOperation.bottom_diameter" type="number" min="0.1" :max="selectedOperation.diameter - 0.01" step="0.01" @change="setDrillBottomDiameter($event.target.value)">
                             </label>
                         </template>
+                        <ShapingOperationFields
+                            v-else-if="Object.hasOwn(shapingLabels, selectedOperation.type)"
+                            :key="selectedOperation.id"
+                            :operation="selectedOperation"
+                            :dimensions="partDraft.dimensions"
+                            :drawing="drawingContour"
+                            @update="updateOperationFromScene(selectedOperation.id, $event)"
+                            @draw="drawingContour = $event"
+                        />
+                        <AdvancedMachiningFields
+                            v-else-if="Object.hasOwn(advancedTools, selectedOperation.type)"
+                            :key="selectedOperation.id"
+                            :operation="selectedOperation"
+                            :dimensions="partDraft.dimensions"
+                            :drawing="drawingContour"
+                            @update="updateOperationFromScene(selectedOperation.id, $event)"
+                            @draw="drawingContour = $event"
+                            @copy-row="drillRowClipboard = { ...selectedOperation }"
+                        />
                         <details v-if="operationHelp[selectedOperation.type]" :key="selectedOperation.type" class="inspector-operation-help">
                             <summary>Подсказка по инструменту</summary>
                             <p>{{ operationHelp[selectedOperation.type] }}</p>
@@ -764,7 +793,16 @@
             </aside>
         </div>
 
-        <ProjectScriptDialog v-if="showScriptEditor" :project-id="projectId" :apply-script="applyScript" @close="showScriptEditor = false" @detach="clearHistory" />
+        <ProjectScriptDialog
+            v-if="showScriptEditor"
+            :key="scriptEditorMode"
+            :project-id="projectId"
+            :apply-script="applyScript"
+            :dimensions-only="scriptEditorMode === 'dimensions'"
+            @close="showScriptEditor = false"
+            @detach="clearHistory"
+            @open-code="scriptEditorMode = 'code'"
+        />
         <ProjectVersionsDialog v-if="showVersions" :project-id="projectId" :on-restored="reloadRestoredProject" @close="showVersions = false" />
         <div v-if="showCreatePart" class="editor-modal-backdrop" @click.self="showCreatePart = false">
             <form class="editor-modal" @submit.prevent="createPart">
@@ -1029,6 +1067,10 @@ import {
 } from '../editor/assemblyTree.js';
 import { duplicateBlueprint, instanceBlueprintPayload, linearArrayBlueprints, mirroredBlueprint } from '../editor/instanceCopies.js';
 import { createOperation, normalizeOperations, operationLabel, operationSummary } from '../editor/operations/catalog.js';
+import ShapingOperationFields from '../components/ShapingOperationFields.vue';
+import AdvancedMachiningFields from '../components/AdvancedMachiningFields.vue';
+import { advancedTools, fitAdvanced, validRoute } from '../editor/operations/advancedMachining.js';
+import { fitShaping, isSimpleContour, shapingLabels } from '../editor/operations/shaping.js';
 import { fitDrillToFace } from '../editor/operations/drill.js';
 import {
     fitPlungeOperationToFace,
@@ -1062,6 +1104,11 @@ const operationTools = [
     { type: 'edge_roundover', icon: '◜', caption: 'Кромка', label: 'Кромочный фрезер' },
     { type: 'plunge_route', icon: '⌾', caption: 'Фрезер', label: 'Погружной фрезер' },
     { type: 'drill', icon: '●', caption: 'Сверло', label: 'Сверление' },
+    { type: 'rabbet', icon: '⌞', caption: 'Четверть', label: shapingLabels.rabbet },
+    { type: 'pocket', icon: '▣', caption: 'Карман', label: shapingLabels.pocket },
+    { type: 'edge_chamfer', icon: '◩', caption: 'Фаска', label: shapingLabels.edge_chamfer },
+    { type: 'jigsaw_cut', icon: '∿', caption: 'Лобзик', label: shapingLabels.jigsaw_cut },
+    ...Object.entries(advancedTools).map(([type, tool]) => ({ type, ...tool })),
 ];
 const operationHelp = {
     cross_cut: 'На полной глубине часть отделяется, на меньшей остаётся пропил шириной диска.',
@@ -1070,11 +1117,21 @@ const operationHelp = {
     edge_roundover: 'Кликните рядом с нужной кромкой на сцене. Фрезер пройдёт по всей её длине.',
     plunge_route: 'Выберите грань. Жёлтая ручка задаёт точку погружения, красная — направление и длину прохода.',
     drill: 'Выберите грань и перетащите красный цилиндр к точке сверления.',
+    rabbet: 'Кликните по грани рядом с кромкой. Задайте ширину и глубину, затем перетащите короткую выборку вдоль кромки.',
+    pocket: 'Кликните по грани или перетащите карман по ней. Размеры и глубина задаются справа.',
+    edge_chamfer: 'Кликните рядом с кромкой. Shift + клик добавляет такую же фаску на другую кромку.',
+    jigsaw_cut: 'Выберите грань и форму или нарисуйте свой контур. Точки контура можно перетаскивать мышью.',
+    drill_row: 'Клик задаёт первое отверстие. Оранжевую ручку можно перетащить. Скопированный ряд можно вставить в другой заготовке.',
+    pocket_screw: 'Клик задаёт вход сверла. Синяя линия показывает ось. В контексте сборки точка на соседней детали отмечается, если пилот до неё достаёт.',
+    curve_route: 'Точки на сцене задают путь центра фрезы. Для замкнутого паза включите переключатель «Замкнутая».',
+    taper: 'Сужение идёт вдоль заготовки. При обработке двух сторон меняется только ширина, при обработке четырёх — также толщина.',
+    turning: 'Профиль вращается вокруг продольной оси заготовки. Двигайте точки на схеме или задавайте расстояние и диаметр в миллиметрах.',
 };
 const loading = ref(true);
 const projectName = ref('');
 const projectDescription = ref('');
 const saveState = ref('saved');
+const partOperationError = ref('');
 const groupMoveError = ref('');
 const editorMode = ref('assembly');
 const presentationViewport = ref(null);
@@ -1141,10 +1198,18 @@ const selectedPartId = ref(null);
 const selectedInstanceId = ref(null);
 const selectedConnectionId = ref(null);
 const selectedOperationId = ref(null);
+const drawingContour = ref(false);
+const drillRowClipboard = ref(null);
+const drillRowMirror = ref('');
+watch(selectedOperationId, () => {
+    drawingContour.value = false;
+    partOperationError.value = '';
+});
 const partDraft = ref(null);
 const historyExpanded = ref(false);
 const showCreatePart = ref(false);
 const showScriptEditor = ref(false);
+const scriptEditorMode = ref('code');
 const showVersions = ref(false);
 const creatingPart = ref(false);
 const createError = ref('');
@@ -1271,6 +1336,7 @@ watch(() => projects.parts.map(part => part.id), fastenerGeometry.retain);
 const { applyScript } = useProjectScripts({
     projectId, projects, recordHistory,
     onApplied: async () => {
+        if (assemblyGuideActive.value) finishAssemblyGuide();
         presentationSettings.value = { ...defaultPresentation, ...projects.activeProject?.render_settings };
         await fastenerTool.reload().catch(() => {});
         selectedInstanceId.value = null;
@@ -1281,13 +1347,14 @@ const { applyScript } = useProjectScripts({
         await resetPartHistoryBaseline();
     },
 });
-const openScriptEditor = async () => {
+const openScriptEditor = async (mode = 'code') => {
     if (editorMode.value === 'part') {
         if (!window.confirm('Сохранить текущую заготовку и открыть сценарий?')) return;
         await savePart();
         if (saveState.value === 'error') return;
     }
     flushPartHistory();
+    scriptEditorMode.value = mode;
     showScriptEditor.value = true;
 };
 let partHistoryBaseline = null;
@@ -1696,10 +1763,50 @@ const reloadRestoredProject = async () => {
 };
 
 const addOperation = (type) => {
+    if (partDraft.value.operations.length >= 50) {
+        partOperationError.value = 'На заготовке может быть не больше 50 операций.';
+        return;
+    }
     labelPartHistory('Добавление операции');
     const operation = createOperation(type, partDraft.value.dimensions);
     partDraft.value.operations.push(operation);
     selectedOperationId.value = operation.id;
+};
+
+const pasteDrillRow = () => {
+    const source = drillRowClipboard.value;
+    const size = surfaceDimensions(source.face, partDraft.value.dimensions);
+    const changes = { ...source };
+    if (drillRowMirror.value === 'u') {
+        changes.center_u = size.u - Number(changes.center_u);
+        changes.path_angle = ((180 - Number(changes.path_angle) + 540) % 360) - 180;
+    } else if (drillRowMirror.value === 'v') {
+        changes.center_v = size.v - Number(changes.center_v);
+        changes.path_angle = -Number(changes.path_angle);
+    }
+    const fitted = fitAdvanced(changes, partDraft.value.dimensions);
+    const compare = ['center_u', 'center_v', 'diameter', 'hole_count', 'hole_spacing', ...(!changes.through ? ['depth'] : [])];
+    if (compare.some(key => Math.abs(Number(changes[key]) - fitted[key]) > 1e-6)) {
+        partOperationError.value = 'Ряд с этим отступом и шагом не помещается на выбранной заготовке.';
+        return;
+    }
+    const previous = selectedOperationId.value;
+    addOperation('drill_row');
+    if (selectedOperationId.value === previous) return;
+    Object.assign(selectedOperation.value, fitted, { id: selectedOperationId.value, status: 'draft', enabled: true });
+};
+
+const addChamferEdge = (edge) => {
+    const operation = selectedOperation.value;
+    if (operation?.type !== 'edge_chamfer' || edge === operation.edge) return;
+    const existing = partDraft.value.operations.find(item => item.type === 'edge_chamfer' && item.edge === edge && item.status === 'draft' && item.enabled !== false);
+    if (existing) {
+        selectedOperationId.value = existing.id;
+        return;
+    }
+    addOperation('edge_chamfer');
+    if (selectedOperationId.value === operation.id) return;
+    Object.assign(selectedOperation.value, fitShaping({ ...selectedOperation.value, edge, width: operation.width }, partDraft.value.dimensions));
 };
 
 const removeOperation = (operationIdToRemove) => {
@@ -1942,8 +2049,19 @@ const savePart = async () => {
     if (!activePart.value || !partDraft.value) {
         return;
     }
+    if (partDraft.value.operations.some(operation => operation.type === 'jigsaw_cut' && !isSimpleContour(operation.points))) {
+        partOperationError.value = 'Замкните контур фигурного реза минимум из трёх точек без пересечений.';
+        saveState.value = 'error';
+        return;
+    }
+    if (partDraft.value.operations.some(operation => operation.type === 'curve_route' && !validRoute(operation, partDraft.value.dimensions))) {
+        partOperationError.value = 'Проверьте траекторию фрезы, отступ от краёв и совместимость глубины с профилем фрезы.';
+        saveState.value = 'error';
+        return;
+    }
 
     flushPartHistory();
+    partOperationError.value = '';
     saveState.value = 'saving';
 
     try {
@@ -1963,7 +2081,9 @@ const savePart = async () => {
         await resetPartHistoryBaseline();
         if (dimensionsChanged) await projects.fetchProjectConnections(projectId);
         saveState.value = 'applied';
-    } catch {
+    } catch (error) {
+        const validation = error.response?.data?.errors;
+        partOperationError.value = Object.entries(validation ?? {}).find(([key]) => key.startsWith('operations.'))?.[1]?.[0] ?? '';
         saveState.value = 'error';
     }
 };

@@ -22,6 +22,13 @@ export const workshopOperationDetails = (operation, thickness) => {
     }
 
     if (operation.type === 'drill') return `${operationSummary(operation)} · центр ${point(operation.center_u, operation.center_v)}`;
+    if (operation.type === 'rabbet') return `${faceLabel(operation.face)} · ${operationSummary(operation)}`;
+    if (operation.type === 'pocket') return `${faceLabel(operation.face)} · центр ${point(operation.center_u, operation.center_v)} · ${operationSummary(operation)}`;
+    if (operation.type === 'jigsaw_cut' && operation.points?.length) {
+        const values = key => operation.points.map(vertex => Number(vertex[key]));
+        const extent = key => Math.round((Math.max(...values(key)) - Math.min(...values(key))) * 100) / 100;
+        return `${faceLabel(operation.face)} · контур ${extent('u')} × ${extent('v')} мм · ${operationSummary(operation)}`;
+    }
     if (operation.type === 'groove') return `${faceLabel(operation.face)} · центр ${point(operation.center_u, operation.center_v)} · ${operationSummary(operation)}`;
     if (operation.type === 'plunge_route') {
         const angle = operation.cutter_angle ? ` · угол фрезы ${operation.cutter_angle}°` : '';

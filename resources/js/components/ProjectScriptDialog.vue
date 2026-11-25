@@ -1,20 +1,20 @@
 <template>
-    <dialog ref="dialog" class="fixed inset-0 m-auto h-[92dvh] max-h-none w-[96vw] max-w-none overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 p-0 text-stone-800 shadow-2xl backdrop:bg-stone-950/60" aria-labelledby="script-title" @cancel.prevent="close" @keydown.stop>
+    <dialog ref="dialog" class="fixed inset-0 m-auto h-[92dvh] max-h-none w-[96vw] overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 p-0 text-stone-800 shadow-2xl backdrop:bg-stone-950/60" :class="dimensionsOnly ? 'max-w-5xl' : 'max-w-none'" aria-labelledby="script-title" @cancel.prevent="close" @keydown.stop @keydown.ctrl.enter.prevent="preview" @keydown.meta.enter.prevent="preview">
         <div class="flex h-full min-h-0 flex-col">
             <header class="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 bg-white px-5 py-4">
-                <div><h2 id="script-title" class="text-lg font-semibold">Сценарий изделия <span class="ml-2 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">JavaScript</span></h2><p class="mt-1 text-xs text-stone-500">Код → предпросмотр → отдельный узел в сборке</p></div>
-                <button class="icon-button" type="button" aria-label="Закрыть сценарий" :disabled="busy" @click="close">×</button>
+                <div><h2 id="script-title" class="text-lg font-semibold">{{ dimensionsOnly ? 'Размеры изделия' : 'Сценарий изделия' }} <span v-if="!dimensionsOnly" class="ml-2 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">JavaScript</span></h2><p v-if="dimensionsOnly && source === parametricBoxScript" class="mt-1 text-xs text-stone-500">Деревянный ящик со съёмной крышкой</p><p v-else-if="!dimensionsOnly" class="mt-1 text-xs text-stone-500">Код → предпросмотр → отдельный узел в сборке</p></div>
+                <button class="icon-button" type="button" aria-label="Закрыть" :disabled="busy" @click="close">×</button>
             </header>
-            <div class="grid min-h-0 flex-1 overflow-auto lg:grid-cols-2">
-                <section class="flex min-h-[420px] flex-col gap-3 border-r border-stone-200 p-4">
+            <div class="grid min-h-0 flex-1 overflow-auto" :class="dimensionsOnly ? 'lg:grid-cols-[19rem_minmax(0,1fr)]' : 'lg:grid-cols-2'">
+                <section v-if="!dimensionsOnly" class="flex min-h-[420px] flex-col gap-3 border-r border-stone-200 p-4">
                     <div class="flex flex-wrap items-center gap-2">
-                        <label class="text-xs text-stone-600">Пример <select class="ml-2 rounded-lg border border-stone-300 bg-white p-2" :disabled="busy" @change="loadExample($event)"><option value="">Выберите…</option><option value="bench">Скамья с повторяющимися ножками</option><option value="machining">Панель со сверлением</option><option value="joinery">Параметры, шип–паз и копии узла</option><option value="assembly">???? ? ??????????? ?? ??????</option></select></label>
+                        <label class="text-xs text-stone-600">Пример <select class="ml-2 rounded-lg border border-stone-300 bg-white p-2" :disabled="busy" @change="loadExample($event)"><option value="">Выберите…</option><option value="bench">Скамья с повторяющимися ножками</option><option value="machining">Панель со сверлением</option><option value="joinery">Параметры, шип–паз и копии узла</option><option value="assembly">Ящик с инструкцией по сборке</option><option value="box">Параметрический деревянный ящик</option></select></label>
                         <span class="ml-auto text-xs text-stone-500">{{ dirty ? 'Есть несохранённые изменения' : 'Код сохранён' }}</span>
                     </div>
                     <div v-if="localDraft" class="rounded-lg bg-amber-50 p-3 text-xs text-amber-900" role="status">Есть несохранённый локальный сценарий от {{ new Date(localDraft.savedAt).toLocaleString('ru') }}.<div class="mt-2 flex gap-3"><button type="button" class="underline" :disabled="busy" @click="restoreLocalDraft">Восстановить</button><button type="button" class="underline" :disabled="busy" @click="discardLocalDraft">Удалить черновик</button></div></div>
                     <p v-if="draftWarning" role="alert" class="text-xs text-amber-800">{{ draftWarning }}</p>
                     <label for="script-source" class="sr-only">Код сценария на JavaScript</label>
-                    <textarea id="script-source" ref="editor" v-model="source" :disabled="busy || Boolean(localDraft)" spellcheck="false" autocapitalize="off" autocomplete="off" class="min-h-72 flex-1 resize-none rounded-xl border border-emerald-900 bg-emerald-950 p-4 font-mono text-sm leading-6 text-emerald-50 outline-offset-2 selection:bg-emerald-700" @keydown.tab.prevent="indent" @keydown.ctrl.enter.prevent="preview" @keydown.meta.enter.prevent="preview"></textarea>
+                    <textarea id="script-source" ref="editor" v-model="source" :disabled="busy || Boolean(localDraft)" spellcheck="false" autocapitalize="off" autocomplete="off" class="min-h-72 flex-1 resize-none rounded-xl border border-emerald-900 bg-emerald-950 p-4 font-mono text-sm leading-6 text-emerald-50 outline-offset-2 selection:bg-emerald-700" @keydown.tab.prevent="indent"></textarea>
                     <details class="rounded-xl border border-stone-200 bg-white p-3 text-xs leading-6">
                         <summary class="font-semibold text-emerald-900">Команды и правила координат</summary>
                         <div class="mt-2 space-y-2">
@@ -24,11 +24,19 @@
                             <p><code>instance.move([x,y,z]).rotate([x,y,z])</code> — смещение и дополнительный поворот в осях родителя. Те же методы есть у узла; поворот узла — вокруг его начала координат.</p>
                             <p><code>instance.alignTo(target, { face: "start", targetFace: "end", gap: 0, offset: [0,0,0] })</code> совмещает центры граней и разворачивает нормали навстречу. Gap — зазор по нормали целевой грани, offset — мировое смещение. Отрицательный gap задаёт посадку.</p>
                             <p><code>repeat(part, { count: 5, step: [80,0,0], position: [0,0,0] })</code> создаёт 5 экземпляров. Для экземпляра или узла count — число дополнительных копий. <code>mirror(instanceOrGroup, { axis: "x", origin: [0,0,0] })</code> создаёт отражённую копию относительно мировой плоскости; внутренние соединения копируются.</p>
-                            <p><code>parameter("width", { label: "Ширина", default: 800, min: 300, max: 2000, step: 10 })</code> — числовое поле. Чтобы появились поля, запустите первый предпросмотр.</p>
+                            <p><code>parameter("width", { label: "Ширина", default: 800, min: 300, max: 2000, step: 10, unit: "мм" })</code> — числовое поле в панели «Размеры изделия» после сохранения сценария. В редакторе кода поля появляются после предпросмотра.</p>
                             <p><code>connect(first, second, { type: "mortise_tenon", primary_face: "end", secondary_face: "start", tenon_length: 20, tenon_width: 30, tenon_thickness: 10 }).generateMachining()</code>. Типы: butt, dowel, half_lap, mortise_tenon. Для шипа первый экземпляр — шип, второй — паз; gap = -tenon_length. Для вполдерева gap — отрицательная сумма глубин двух выборок. Без generateMachining сохраняется только описание соединения.</p>
                             <p>Обработка проверяет положение исходных плоских граней и направления выборок; это не проверка прочности или полной собираемости изделия. Зазоры посадки и произвольный поворот профиля шипа пока не поддерживаются.</p>
                             <p>Короткие методы: <code>board.drill({ diameter: 8 }).groove({ depth: 6 }).roundover({ radius: 3 })</code>, <code>crossCut()</code>, <code>ripCut()</code>, <code>plungeRoute()</code>. Все возвращают заготовку; параметры можно задать явно через operation.</p>
-                            <p><code>part.operation(type, parameters)</code> — обработка всех экземпляров заготовки. Типы: <code>cross_cut, rip_cut, groove, edge_roundover, plunge_route, drill</code>. Параметры совпадают с API инструментов.</p>
+                            <p><code>part.operation(type, parameters)</code> — обработка всех экземпляров заготовки. Параметры совпадают с API инструментов.</p>
+                            <p><code>board.rabbet({ edge: "top_left", face: "top", start: 0, cut_length: 200, width: 10, depth: 5 })</code> — четверть вдоль кромки. <code>board.chamfer({ edge: "top_right", width: 3 })</code> — фаска 45°.</p>
+                            <p><code>board.pocket({ face: "top", pocket_shape: "rectangle", center_u: 80, center_v: 40, pocket_length: 40, width: 20, depth: 6, corner_radius: 3 })</code> — карман. Для круглого укажите <code>pocket_shape: "circle"</code> и <code>diameter</code>.</p>
+                            <p><code>board.jigsawCut({ face: "top", points: [{ u: 25, v: 15 }, { u: 55, v: 15 }, { u: 40, v: 35 }] })</code> — сквозной фигурный рез. Последняя точка соединяется с первой.</p>
+                            <p><code>board.drillRow({ face: "top", center_u: 30, center_v: 25, path_angle: 0, hole_count: 4, hole_spacing: 32, diameter: 5, depth: 10, through: false })</code> создаёт ряд от первого отверстия.</p>
+                            <p><code>board.pocketScrew({ face: "top", center_u: 80, center_v: 40, path_angle: 0, entry_angle: 15, diameter: 9, depth: 24, pilot_diameter: 4, pilot_length: 36 })</code> задаёт ступень и пилот вдоль наклонной оси.</p>
+                            <p><code>board.curveRoute({ face: "top", points: [{ u: 20, v: 30 }, { u: 60, v: 50 }, { u: 100, v: 30 }], closed_path: false, smooth_path: true, cutter_profile: "straight", cutter_angle: 0, cutter_diameter: 8, depth: 4 })</code> проводит фрезу по пути.</p>
+                            <p><code>leg.taper({ taper_sides: "two", start_width: 60, end_width: 30 })</code> сужает заготовку по ширине. Для <code>"four"</code> также задайте <code>start_height</code> и <code>end_height</code>.</p>
+                            <p><code>leg.turn({ stations: [{ at: 0, diameter: 60 }, { at: 700, diameter: 30 }], smooth_profile: true })</code> вращает профиль вокруг продольной оси. Последняя точка должна совпадать с длиной заготовки.</p>
                             <p><code>board.stock(catalogId)</code> назначает доску или лист, <code>defaultStock(catalogId)</code> задаёт материал проекта, <code>supply(catalogId, quantity)</code> добавляет расходник.</p>
                             <p><code>fastener(source, { target, catalog_material_id, face, center_u, center_v, sink })</code> добавляет крепёж из каталога. Для ряда задайте <code>count, row_axis, spacing</code> и при необходимости <code>rowTargets</code>. Для шурупов есть <code>.prepareDrilling({ clearance_diameter, pilot, pilot_diameter, pilot_depth, countersink, countersink_diameter, countersink_depth })</code>.</p>
                             <p><code>assemblyStep(title, { parts, highlight, fasteners, instruction, notes, camera })</code> добавляет шаг. В parts и highlight можно передавать экземпляры и узлы, ракурс задаётся через <code>camera: { position: [x,y,z], target: [x,y,z] }</code>.</p>
@@ -38,11 +46,20 @@
                         </div>
                     </details>
                 </section>
-                <section class="flex min-h-[420px] flex-col gap-3 p-4">
-                    <div v-if="parameterDefinitions.length" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                <section v-if="dimensionsOnly" class="p-4 lg:border-r lg:border-stone-200">
+                    <p v-if="!busy && !visibleParameterDefinitions.length" class="text-sm text-stone-600">{{ source ? 'В сценарии нет доступных параметров.' : 'Размеры можно задать для изделия, созданного по параметрическому сценарию.' }}</p>
+                    <button v-if="!source && !busy" class="button-secondary button-compact mt-3" type="button" @click="loadBoxPreset">Добавить параметрический ящик</button>
+                    <button v-if="conflict" class="button-secondary button-compact mb-3" type="button" :disabled="busy" @click="reloadDimensions">Загрузить сохранённые значения</button>
+                    <div v-if="visibleParameterDefinitions.length" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
                         <div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">Параметры изделия</h3><button type="button" class="text-xs text-emerald-800 underline" :disabled="busy" @click="parameterValues = {}">Сбросить</button></div>
-                        <div class="grid max-h-48 grid-cols-2 gap-3 overflow-auto"><label v-for="item in parameterDefinitions" :key="item.name" class="flex flex-col gap-1 text-xs">{{ item.label }}<input v-scrub-number v-model.number="parameterValues[item.name]" :placeholder="String(item.default)" :disabled="busy" type="number" :min="item.min" :max="item.max" :step="item.step" class="rounded-lg border border-emerald-200 bg-white p-2 text-sm"></label></div>
-                        <p class="mt-2 text-xs text-emerald-800">После изменения нажмите «Предпросмотр».</p>
+                        <ScriptParameterFields :definitions="visibleParameterDefinitions" :values="parameterValues" :screws="screws" :disabled="busy" @change="updateParameter" />
+                        <p v-if="source === parametricBoxScript && !parameterValues.screwId" class="mt-2 text-xs text-stone-600">Шурупы можно выбрать из каталога. По умолчанию в модели будут только отверстия под крепёж.</p>
+                    </div>
+                </section>
+                <section class="flex min-h-[420px] flex-col gap-3 p-4">
+                    <div v-if="!dimensionsOnly && visibleParameterDefinitions.length" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                        <div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">Параметры изделия</h3><button type="button" class="text-xs text-emerald-800 underline" :disabled="busy" @click="parameterValues = {}">Сбросить</button></div>
+                        <ScriptParameterFields :definitions="visibleParameterDefinitions" :values="parameterValues" :screws="screws" :disabled="busy" @change="updateParameter" />
                     </div>
                     <div class="flex items-center justify-between gap-2 text-sm">
                         <h3 class="font-semibold">Предпросмотр результата</h3>
@@ -62,29 +79,33 @@
                     <p v-if="error" role="alert" class="max-h-36 overflow-auto whitespace-pre-wrap rounded-xl bg-red-50 p-3 text-sm text-red-800">{{ error }}</p>
                     <p v-if="notice" role="status" class="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900">{{ notice }}</p>
                     <pre v-if="logs.length" class="max-h-28 overflow-auto whitespace-pre-wrap rounded-xl bg-stone-200/50 p-3 text-xs">{{ logs.join('\n') }}</pre>
-                    <p class="text-xs leading-5 text-stone-500">{{ hasResult ? 'Применение заменит предыдущий результат этого сценария. Ручные изменения защищены от перезаписи.' : 'Применение создаст новый узел Script result. Остальные детали останутся на месте.' }} Изменение кода сбрасывает предпросмотр.</p>
+                    <p v-if="!dimensionsOnly" class="text-xs leading-5 text-stone-500">{{ hasResult ? 'Применение заменит предыдущий результат этого сценария. Ручные изменения защищены от перезаписи.' : 'Применение создаст новый узел Script result. Остальные детали останутся на месте.' }} Изменение кода сбрасывает предпросмотр.</p>
                 </section>
             </div>
             <footer class="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 bg-white px-5 py-4">
-                <div class="flex flex-wrap gap-2"><button class="button-secondary button-compact" type="button" :disabled="busy" @click="save">Сохранить код</button><button v-if="hasResult" class="button-secondary button-compact" type="button" :disabled="busy" @click="detach">Отвязать результат</button></div>
-                <div class="flex gap-2"><button v-if="running" class="button-secondary button-compact" type="button" @click="abortController?.abort()">Остановить</button><button class="button-secondary button-compact" type="button" :disabled="busy" title="Ctrl+Enter" @click="preview">{{ busy ? 'Обработка…' : 'Предпросмотр' }}</button><button class="button-primary button-compact" type="button" :disabled="busy || !validatedPayload" @click="apply">Применить в сборке</button></div>
+                <div class="flex flex-wrap gap-2"><button v-if="dimensionsOnly" class="button-secondary button-compact" type="button" :disabled="busy" @click="openCode">Открыть сценарий</button><template v-else><button class="button-secondary button-compact" type="button" :disabled="busy" @click="save">Сохранить код</button><button v-if="hasResult" class="button-secondary button-compact" type="button" :disabled="busy" @click="detach">Отвязать результат</button></template></div>
+                <div class="flex gap-2"><button v-if="running" class="button-secondary button-compact" type="button" @click="abortController?.abort()">Остановить</button><button class="button-secondary button-compact" type="button" :disabled="busy || conflict || (dimensionsOnly && !visibleParameterDefinitions.length)" title="Ctrl+Enter" @click="preview">{{ busy ? 'Обработка…' : 'Предпросмотр' }}</button><button class="button-primary button-compact" type="button" :disabled="busy || !validatedPayload" @click="apply">Применить в сборке</button></div>
             </footer>
         </div>
     </dialog>
 </template>
 
 <script setup>
-import { vScrubNumber } from '../editor/scrubNumber.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import axios from 'axios';
 import ThreeViewport from './ThreeViewport.vue';
-import { assemblyScript, joineryScript, machiningScript, starterScript } from '../editor/scriptApi.js';
+import ScriptParameterFields from './ScriptParameterFields.vue';
+import { assemblyScript, joineryScript, machiningScript, parametricBoxScript, starterScript } from '../editor/scriptApi.js';
 import { runScript } from '../editor/scriptSandbox.js';
 import { draftKey, readDraft, writeDraft, removeDraft } from '../editor/draftStorage.js';
 import { useAuthStore } from '../stores/auth.js';
 
-const props = defineProps({ projectId: { type: Number, required: true }, applyScript: { type: Function, required: true } });
-const emit = defineEmits(['close', 'detach']);
+const props = defineProps({
+    projectId: { type: Number, required: true },
+    applyScript: { type: Function, required: true },
+    dimensionsOnly: Boolean,
+});
+const emit = defineEmits(['close', 'detach', 'open-code']);
 const dialog = ref(null);
 const editor = ref(null);
 const source = ref('');
@@ -105,6 +126,9 @@ const previewRender = ref(false);
 const previewRenderSettings = ref({});
 const parameterDefinitions = ref([]);
 const parameterValues = ref({});
+const visibleParameterDefinitions = computed(() => parameterDefinitions.value.filter(item => item.kind !== 'hidden'));
+const screws = ref([]);
+const conflict = ref(false);
 const savedValues = ref('{}');
 const previewVersion = ref(0);
 const validatedPayload = ref(null);
@@ -125,7 +149,7 @@ const restoreLocalDraft = () => {
     localDraft.value = null;
 };
 const persistLocalDraft = () => {
-    if (!recoveryReady || localDraft.value) return;
+    if (props.dimensionsOnly || !recoveryReady || localDraft.value) return;
     if (!dirty.value) { removeDraft(localStorage, storageKey()); return; }
     if (!writeDraft(localStorage, storageKey(), { source: source.value, parameterValues: parameterValues.value }, revision.value)) draftWarning.value = 'Не удалось сохранить локальный черновик. Сохраните код на сервере.';
 };
@@ -135,6 +159,12 @@ const invalidate = () => { validatedPayload.value = null; previewParts.value = [
 watch(source, () => { invalidate(); parameterDefinitions.value = []; });
 watch(parameterValues, invalidate, { deep: true });
 const reportError = (failure) => {
+    if (props.dimensionsOnly && failure.response?.status === 409) {
+        conflict.value = true;
+        invalidate();
+        error.value = 'Проект изменился. Загрузите сохранённые значения и повторите изменения.';
+        return;
+    }
     error.value = failure.response?.data?.errors
         ? Object.entries(failure.response.data.errors).map(([field, messages]) => `${field}: ${messages.join(' ')}`).join('\n')
         : failure.response?.status === 409 ? 'Проект изменился. Запустите предпросмотр заново; для сохранения кода повторите действие.' : failure.response?.data?.message ?? failure.message;
@@ -158,24 +188,51 @@ const save = () => perform(async () => {
     validatedPayload.value = null;
     notice.value = 'Код сохранён. Сборка не изменена.';
 });
+const runDraft = async () => {
+    abortController = new AbortController();
+    running.value = true;
+    try {
+        return await runScript(source.value, { signal: abortController.signal, values: parameterValues.value });
+    } finally {
+        running.value = false;
+    }
+};
+const readDefinitions = result => {
+    parameterDefinitions.value = (result.parameters ?? []).slice(0, 30).filter(item => typeof item.name === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(item.name) && ['default', 'min', 'max', 'step', 'value'].every(key => Number.isFinite(item[key])));
+};
+const updateParameter = (item, value) => {
+    const values = { ...parameterValues.value, [item.name]: value };
+    if (item.kind === 'screw') {
+        const selected = screws.value.find(screw => Number(screw.id) === value);
+        for (const [parameter, attribute] of [[item.diameterParameter, 'fastener_diameter'], [item.lengthParameter, 'fastener_length']]) {
+            const definition = parameterDefinitions.value.find(candidate => candidate.name === parameter && candidate.kind === 'hidden');
+            if (definition) values[parameter] = selected ? Number(selected[attribute]) : definition.default;
+        }
+    }
+    parameterValues.value = values;
+};
 const preview = () => perform(async () => {
+    if (conflict.value || (props.dimensionsOnly && !visibleParameterDefinitions.value.length)) return;
     validatedPayload.value = null;
     previewParts.value = [];
     previewRender.value = false;
     logs.value = [];
-    abortController = new AbortController();
-    running.value = true;
-    let result;
-    try { result = await runScript(source.value, { signal: abortController.signal, values: parameterValues.value }); } finally { running.value = false; }
-    parameterDefinitions.value = (result.parameters ?? []).slice(0, 30).filter(item => typeof item.name === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(item.name) && ['default', 'min', 'max', 'step', 'value'].every(key => Number.isFinite(item[key])));
-    parameterValues.value = Object.fromEntries(parameterDefinitions.value.map(item => [item.name, item.value]));
-    const { data: current } = await axios.get(`/projects/${props.projectId}/script`);
-    revision.value = current.data.revision;
-    hasResult.value = current.data.has_result;
+    const result = await runDraft();
+    readDefinitions(result);
+    if (!props.dimensionsOnly) {
+        const { data: current } = await axios.get(`/projects/${props.projectId}/script`);
+        revision.value = current.data.revision;
+        hasResult.value = current.data.has_result;
+    }
     const { logs: scriptLogs, ...compiled } = result;
     delete compiled.parameters;
-    const payload = { ...compiled, source: source.value, parameter_values: parameterValues.value, expected_revision: revision.value };
+    const values = Object.fromEntries(parameterDefinitions.value.map(item => [item.name, item.value]));
+    const payload = { ...compiled, source: source.value, parameter_values: values, expected_revision: revision.value };
     const { data } = await axios.post(`/projects/${props.projectId}/script/run`, { ...payload, dry_run: true });
+    if (JSON.stringify(values) !== JSON.stringify(parameterValues.value)) {
+        parameterValues.value = values;
+        await nextTick();
+    }
     previewParts.value = data.data.parts;
     previewConnections.value = data.data.connections ?? [];
     previewFasteners.value = data.data.fasteners ?? [];
@@ -193,7 +250,7 @@ const apply = () => perform(async () => {
     revision.value = result.revision;
     savedSource.value = source.value;
     savedValues.value = JSON.stringify(parameterValues.value);
-    discardLocalDraft();
+    if (!props.dimensionsOnly) discardLocalDraft();
     hasResult.value = result.has_result;
     validatedPayload.value = null;
     notice.value = 'Применено. Закройте окно, чтобы продолжить работу в сборке. Ctrl+Z отменит запуск целиком.';
@@ -212,15 +269,19 @@ const detach = () => {
         notice.value = 'Детали сохранены в сборке и больше не связаны со сценарием.';
     });
 };
-const close = () => {
-    if (busy.value || (dirty.value && !window.confirm('Закрыть без сохранения изменений кода?'))) return;
+const leave = event => {
+    if (busy.value || (dirty.value && !window.confirm(props.dimensionsOnly
+        ? 'Выйти без применения размеров?'
+        : 'Закрыть без сохранения изменений кода?'))) return;
     dialog.value.close();
-    emit('close');
+    emit(event);
 };
+const close = () => leave('close');
+const openCode = () => leave('open-code');
 const loadExample = (event) => {
     if (localDraft.value) { event.target.value = ''; return; }
     if (event.target.value && (!source.value || window.confirm('Заменить текст сценария примером?'))) {
-        source.value = { bench: starterScript, machining: machiningScript, joinery: joineryScript, assembly: assemblyScript }[event.target.value];
+        source.value = { bench: starterScript, machining: machiningScript, joinery: joineryScript, assembly: assemblyScript, box: parametricBoxScript }[event.target.value];
         parameterValues.value = {};
     }
     event.target.value = '';
@@ -230,17 +291,37 @@ const indent = (event) => {
     input.setRangeText('    ', input.selectionStart, input.selectionEnd, 'end');
     source.value = input.value;
 };
+const loadSavedScript = async () => {
+    const { data } = await axios.get(`/projects/${props.projectId}/script`);
+    const saved = data.data;
+    savedSource.value = saved.source ?? '';
+    source.value = props.dimensionsOnly ? savedSource.value : saved.source ?? starterScript;
+    revision.value = saved.revision;
+    hasResult.value = saved.has_result;
+    conflict.value = false;
+    parameterValues.value = Object.fromEntries(Object.entries(saved.parameter_values ?? {}).map(([key, value]) => [key, Number(value)]));
+    savedValues.value = JSON.stringify(parameterValues.value);
+    await nextTick();
+    if (props.dimensionsOnly && source.value) readDefinitions(await runDraft());
+};
+const prepareBoxPreset = async () => {
+    source.value = parametricBoxScript;
+    parameterValues.value = {};
+    await nextTick();
+    readDefinitions(await runDraft());
+};
+const loadBoxPreset = () => perform(prepareBoxPreset);
+const reloadDimensions = () => perform(loadSavedScript);
 onMounted(async () => {
     previousFocus = document.activeElement;
     dialog.value.showModal();
+    axios.get('/v1/materials').then(({ data }) => {
+        screws.value = data.data.filter(item => item.kind === 'consumable'
+            && item.fastener_type === 'screw' && Number(item.fastener_diameter) > 0 && Number(item.fastener_length) > 0);
+    }).catch(() => {});
     try {
-        const { data } = await axios.get(`/projects/${props.projectId}/script`);
-        source.value = data.data.source ?? starterScript;
-        savedSource.value = data.data.source ?? '';
-        revision.value = data.data.revision;
-        hasResult.value = data.data.has_result;
-        parameterValues.value = Object.fromEntries(Object.entries(data.data.parameter_values ?? {}).map(([key, value]) => [key, Number(value)]));
-        savedValues.value = JSON.stringify(parameterValues.value);
+        await loadSavedScript();
+        if (props.dimensionsOnly) return;
         const record = readDraft(localStorage, storageKey());
         if (typeof record?.value?.source === 'string') localDraft.value = record;
         await nextTick();

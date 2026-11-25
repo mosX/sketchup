@@ -168,7 +168,7 @@ class ProjectTemplateManager
                 'width' => max((float) $part['width'] * $factors['width'], 0.1),
                 'thickness' => max((float) $part['thickness'] * $factors['thickness'], 0.1),
                 'grain_axis' => $part['grain_axis'],
-                'operations' => $this->scaleOperations($part['operations'] ?? [], $factors),
+                'operations' => $this->scaleOperations($part['operations'] ?? [], $factors, (float) $part['length']),
             ]);
 
             return;
@@ -189,7 +189,7 @@ class ProjectTemplateManager
                 'width' => max((float) $part['width'] * $factors['width'], 0.1),
                 'thickness' => max((float) $part['thickness'] * $factors['thickness'], 0.1),
                 'grain_axis' => $part['grain_axis'],
-                'operations' => $this->scaleOperations($part['operations'] ?? [], $factors),
+                'operations' => $this->scaleOperations($part['operations'] ?? [], $factors, (float) $part['length']),
             ]);
 
             foreach ($instances as $instance) {
@@ -268,9 +268,9 @@ class ProjectTemplateManager
      * @param  array{length: float, width: float, thickness: float}  $factors
      * @return array<int, array<string, mixed>>
      */
-    private function scaleOperations(array $operations, array $factors): array
+    private function scaleOperations(array $operations, array $factors, float $stockLength): array
     {
-        return collect($operations)->map(function (array $operation) use ($factors): array {
+        return collect($operations)->map(function (array $operation) use ($factors, $stockLength): array {
             $type = $operation['type'] ?? null;
 
             if ($type === 'cross_cut') {
@@ -279,18 +279,97 @@ class ProjectTemplateManager
             } elseif ($type === 'rip_cut') {
                 $this->scaleKeys($operation, ['start_offset', 'end_offset'], $factors['width']);
                 $this->scaleKeys($operation, ['cut_depth'], $factors['thickness']);
-            } elseif (in_array($type, ['groove', 'plunge_route', 'drill'], true)) {
+            } elseif (in_array($type, ['groove', 'plunge_route', 'drill', 'pocket', 'jigsaw_cut'], true)) {
                 [$uFactor, $vFactor, $depthFactor] = $this->faceFactors($operation['face'] ?? 'top', $factors);
                 $this->scaleKeys($operation, ['center_u', 'start_u'], $uFactor);
                 $this->scaleKeys($operation, ['center_v', 'start_v'], $vFactor);
                 $this->scaleKeys($operation, ['depth'], $depthFactor);
                 $this->scalePath($operation, $uFactor, $vFactor);
+                if ($type === 'pocket') {
+                    $this->scaleKeys($operation, ['pocket_length'], $uFactor);
+                    $this->scaleKeys($operation, ['width'], $vFactor);
+                    $this->scaleKeys($operation, ['diameter', 'corner_radius'], min($uFactor, $vFactor));
+                }
+                if ($type === 'jigsaw_cut') {
+                    $operation['points'] = array_map(fn (array $point): array => [
+                        'u' => round((float) $point['u'] * $uFactor, 4),
+                        'v' => round((float) $point['v'] * $vFactor, 4),
+                    ], $operation['points']);
+                }
+            } elseif (in_array($type, ['rabbet', 'edge_chamfer'], true)) {
+                $normalAxes = ['top' => 'thickness', 'bottom' => 'thickness', 'left' => 'width', 'right' => 'width', 'start' => 'length', 'end' => 'length'];
+                [$sideA, $sideB] = explode('_', $operation['edge']);
+                if ($type === 'edge_chamfer') {
+                    $this->scaleKeys($operation, ['width'], min($factors[$normalAxes[$sideA]], $factors[$normalAxes[$sideB]]));
+                } else {
+                    $face = $operation['face'];
+                    $across = $face === $sideA ? $sideB : $sideA;
+                    $axis = array_values(array_diff(array_keys($factors), [$normalAxes[$sideA], $normalAxes[$sideB]]))[0];
+                    $this->scaleKeys($operation, ['start', 'cut_length'], $factors[$axis]);
+                    $this->scaleKeys($operation, ['width'], $factors[$normalAxes[$across]]);
+                    $this->scaleKeys($operation, ['depth'], $factors[$normalAxes[$face]]);
+                }
             } elseif ($type === 'edge_roundover') {
                 $this->scaleKeys($operation, ['radius'], min($factors));
+            } elseif (in_array($type, ['drill_row', 'pocket_screw', 'curve_route', 'taper', 'turning'], true)) {
+                $this->scaleAdvancedOperation($operation, $factors, $stockLength);
             }
 
             return $operation;
         })->all();
+    }
+
+    /** @param array<string, mixed> $operation @param array{length: float, width: float, thickness: float} $factors */
+    private function scaleAdvancedOperation(array &$operation, array $factors, float $stockLength): void
+    {
+        if ($operation['type'] === 'turning') {
+            $last = count($operation['stations']) - 1;
+            foreach ($operation['stations'] as $index => &$station) {
+                $station['at'] = $index === $last ? round(max($stockLength * $factors['length'], 0.1), 2) : (float) $station['at'] * $factors['length'];
+                $station['diameter'] = (float) $station['diameter'] * min($factors['width'], $factors['thickness']);
+            }
+
+            return;
+        }
+        if ($operation['type'] === 'taper') {
+            $this->scaleKeys($operation, ['start_width', 'end_width'], $factors['width']);
+            $this->scaleKeys($operation, ['start_height', 'end_height'], $factors['thickness']);
+
+            return;
+        }
+        [$u, $v, $normal] = $this->faceFactors($operation['face'], $factors);
+        $tangent = min($u, $v);
+        if ($operation['type'] === 'curve_route') {
+            $operation['points'] = array_map(fn (array $point): array => ['u' => (float) $point['u'] * $u, 'v' => (float) $point['v'] * $v], $operation['points']);
+            $this->scaleKeys($operation, ['cutter_diameter'], $tangent);
+            $this->scaleKeys($operation, ['depth'], $normal);
+            if ($operation['cutter_profile'] !== 'straight') {
+                $multiplier = $operation['cutter_profile'] === 'v_groove' ? 2 : 1;
+                $angle = deg2rad((float) $operation['cutter_angle']) / $multiplier;
+                $operation['cutter_angle'] = rad2deg(atan(tan($angle) * $tangent / $normal)) * $multiplier;
+            }
+
+            return;
+        }
+        $heading = deg2rad((float) $operation['path_angle']);
+        $x = cos($heading) * $u;
+        $y = sin($heading) * $v;
+        $operation['path_angle'] = rad2deg(atan2($y, $x));
+        $this->scaleKeys($operation, ['center_u'], $u);
+        $this->scaleKeys($operation, ['center_v'], $v);
+        if ($operation['type'] === 'drill_row') {
+            $this->scaleKeys($operation, ['hole_spacing'], hypot($x, $y));
+            $this->scaleKeys($operation, ['diameter'], $tangent);
+            $this->scaleKeys($operation, ['depth'], $normal);
+
+            return;
+        }
+        $entry = deg2rad((float) $operation['entry_angle']);
+        $inPlane = hypot($x, $y) * cos($entry);
+        $inward = sin($entry) * $normal;
+        $operation['entry_angle'] = rad2deg(atan2($inward, $inPlane));
+        $this->scaleKeys($operation, ['depth', 'pilot_length'], hypot($inPlane, $inward));
+        $this->scaleKeys($operation, ['diameter', 'pilot_diameter'], min($tangent, $normal));
     }
 
     /** @param array<string, mixed> $operation @param array<int, string> $keys */

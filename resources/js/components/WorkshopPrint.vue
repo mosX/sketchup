@@ -109,7 +109,7 @@ const cards = computed(() => props.parts.filter(part => part.instances?.length).
     mirrored: part.instances.filter(instance => instance.mirrored).length,
     operations: workshopPartOperations(part),
 })));
-const hasFaceCoordinates = computed(() => cards.value.some(card => card.operations.some(operation => ['groove', 'plunge_route', 'drill'].includes(operation.type))));
+const hasFaceCoordinates = computed(() => cards.value.some(card => card.operations.some(operation => ['groove', 'plunge_route', 'drill', 'pocket', 'jigsaw_cut', 'drill_row', 'pocket_screw', 'curve_route'].includes(operation.type))));
 const stockByPart = computed(() => {
     const materials = new Map();
     for (const cutting of props.report.linear_cutting) {

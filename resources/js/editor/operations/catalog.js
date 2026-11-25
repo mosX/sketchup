@@ -3,6 +3,8 @@ import { createDrillOperation, normalizeDrill } from './drill.js';
 import { createPlungeRouteOperation, normalizePlungeRoute, plungeProfileName } from './plungeRoute.js';
 import { createRoundoverOperation, roundoverEdgeLabels } from './roundover.js';
 import { faceLabel, operationId } from './shared.js';
+import { createShaping, shapingLabels, shapingSummary } from './shaping.js';
+import { advancedSummary, advancedTools, createAdvancedOperation, normalizeAdvanced } from './advancedMachining.js';
 
 export const normalizeOperations = (part) => (part.operations ?? []).map((operation) => {
     if (operation.type !== 'angled_cut') {
@@ -17,6 +19,7 @@ export const normalizeOperations = (part) => (part.operations ?? []).map((operat
         if (operation.type === 'edge_roundover') normalized.radius = Number(operation.radius);
         if (operation.type === 'plunge_route') return normalizePlungeRoute(normalized, part);
         if (operation.type === 'drill') return normalizeDrill(normalized, part);
+        if (Object.hasOwn(advancedTools, operation.type)) return normalizeAdvanced(normalized);
 
         return normalized;
     }
@@ -55,20 +58,25 @@ export const createOperation = (type, dimensions) => {
     if (type === 'edge_roundover') return createRoundoverOperation(common, dimensions);
     if (type === 'plunge_route') return createPlungeRouteOperation(common, dimensions);
     if (type === 'drill') return createDrillOperation(common, dimensions);
+    if (Object.hasOwn(shapingLabels, type)) return createShaping(common, dimensions);
+    if (Object.hasOwn(advancedTools, type)) return createAdvancedOperation(common, dimensions);
 
     return createGrooveOperation(common, dimensions);
 };
 
-export const operationLabel = (operation) => operation.type === 'drill' && operation.bottom_diameter != null ? 'Зенковка' : ({
+export const operationLabel = (operation) => advancedTools[operation.type]?.label ?? (operation.type === 'drill' && operation.bottom_diameter != null ? 'Зенковка' : ({
     cross_cut: 'Поперечный рез',
     rip_cut: 'Продольный рез',
     groove: 'Паз пилой',
     edge_roundover: 'Кромочный фрезер',
     plunge_route: 'Погружной фрезер',
     drill: 'Сверление',
-}[operation.type] ?? 'Операция');
+    ...shapingLabels,
+}[operation.type] ?? 'Операция'));
 
 export const operationSummary = (operation) => {
+    if (Object.hasOwn(advancedTools, operation.type)) return advancedSummary(operation);
+    if (Object.hasOwn(shapingLabels, operation.type)) return shapingSummary(operation);
     if (operation.type === 'cross_cut') return `${operation.position} мм · глубина ${operation.cut_depth} мм`;
     if (operation.type === 'rip_cut') return `${operation.start_offset} → ${operation.end_offset} мм · глубина ${operation.cut_depth} мм`;
     if (operation.type === 'edge_roundover') return `${roundoverEdgeLabels[operation.edge] ?? operation.edge} · R${operation.radius} мм`;

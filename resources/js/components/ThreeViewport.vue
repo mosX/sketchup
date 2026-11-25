@@ -118,6 +118,10 @@ import {
     plungeRoutePlacement,
 } from '../editor/geometry/coordinates.js';
 import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/geometry/cutters.js';
+import { pointOnStockFace, rabbetPlacement } from '../editor/geometry/shapingCutters.js';
+import { pocketScrewPlacement, routeCenterline } from '../editor/geometry/advancedCutters.js';
+import { advancedTools, drillRowCenters, fitAdvanced, isFaceMachining, isPathMachining, isRetainedShape } from '../editor/operations/advancedMachining.js';
+import { fitShaping, roundContourPoint, shapingLabels } from '../editor/operations/shaping.js';
 import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
 import { createPartOutline } from '../editor/geometry/partOutline.js';
 import { createWoodPresentation, exportPresentationPng } from '../editor/woodPresentation.js';
@@ -130,6 +134,7 @@ const props = defineProps({
     mode: { type: String, default: 'assembly' },
     parts: { type: Array, default: () => [] },
     activePart: { type: Object, default: null },
+    drawingContour: Boolean,
     partContextInstance: { type: Object, default: null },
     partContextVisibleInstanceIds: { type: Array, default: () => [] },
     selectedInstanceId: { type: Number, default: null },
@@ -169,7 +174,7 @@ const props = defineProps({
     selectedFastenerId: { type: Number, default: null },
 });
 
-const emit = defineEmits(['select-instance', 'open-instance-group', 'select-operation', 'select-connection', 'connection-preview-rendered', 'fastener-preview-rendered', 'update-operation', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform', 'commit-group-move', 'blocked-group-move', 'pick-fastener-point', 'select-fastener']);
+const emit = defineEmits(['select-instance', 'open-instance-group', 'select-operation', 'select-connection', 'connection-preview-rendered', 'fastener-preview-rendered', 'update-operation', 'add-chamfer-edge', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform', 'commit-group-move', 'blocked-group-move', 'pick-fastener-point', 'select-fastener']);
 const viewport = ref(null);
 const renderStatus = ref('idle');
 const presentationHasModel = ref(false);
@@ -234,6 +239,7 @@ const focusedInstanceIdSet = computed(() => new Set(props.focusedInstanceIds));
 const instructionHighlightSet = computed(() => new Set(props.instructionHighlightIds));
 const instructionFastenerSet = computed(() => new Set(props.instructionFastenerIds));
 const angleCapableOperation = computed(() => ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type));
+const hasExactOffcut = type => ['cross_cut', 'rip_cut'].includes(type) || Object.hasOwn(shapingLabels, type) || Object.hasOwn(advancedTools, type);
 const operationToolVisible = computed(() => anglePanelOpen.value || operationToolHovered.value || hoveredOperationId.value === props.selectedOperationId);
 const selectedOperationLabel = computed(() => ({
     cross_cut: 'Поперечный рез',
@@ -642,7 +648,7 @@ const emptyMessage = computed(() => {
 const createOffcutPreview = (part, geometry) => {
     const operation = part.operations?.find((item) => item.id === props.selectedOperationId);
 
-    if (!['cross_cut', 'rip_cut'].includes(operation?.type)) return;
+    if (!hasExactOffcut(operation?.type)) return;
 
     if (!geometry || geometry.getAttribute('position')?.count === 0) {
         geometry?.dispose();
@@ -779,6 +785,83 @@ const createGrooveEndpointHandles = (part, operation) => {
     }
 };
 
+const createContourPreview = (part, operation) => {
+    const frame = grooveFaceFrame(part, operation.face);
+    const points = (operation.points ?? []).map(({ u, v }) => pointOnStockFace(frame, u, v));
+    if (!points.length) return;
+
+    const markerGeometry = new THREE.SphereGeometry(Math.max(0.012, Math.min(frame.uSize, frame.vSize) * 0.017), 8, 6);
+    const material = new THREE.MeshBasicMaterial({ color: '#f6a021', depthTest: false });
+    points.forEach((point, index) => {
+        const handle = new THREE.Mesh(markerGeometry, material);
+        handle.position.copy(point);
+        handle.renderOrder = 5;
+        handle.userData = { operationId: operation.id, isOperationHelper: true, contourIndex: index };
+        operationHelpers.push(handle);
+        partGroup.add(handle);
+    });
+
+    if (points.length > 1) {
+        const path = operation.type === 'curve_route' && !props.drawingContour
+            ? routeCenterline(operation).map(point => pointOnStockFace(frame, point.x, point.y))
+            : points;
+        const closed = !props.drawingContour && (operation.type === 'jigsaw_cut' || operation.closed_path);
+        const vertices = closed ? [...path, path[0]] : path;
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vertices), new THREE.LineBasicMaterial({ color: '#d84d32', depthTest: false }));
+        line.renderOrder = 4;
+        partGroup.add(line);
+    }
+};
+
+const addAdvancedMarker = (point, radius, color) => {
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(radius, 10, 7), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    marker.position.copy(point);
+    marker.renderOrder = 6;
+    partGroup.add(marker);
+    return marker;
+};
+
+const advancedGuide = (points, color) => {
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color, depthTest: false }));
+    line.renderOrder = 5;
+    partGroup.add(line);
+};
+
+const createAdvancedFacePreview = (part, operation) => {
+    const frame = grooveFaceFrame(part, operation.face);
+    const markerRadius = Math.max(0.013, Math.min(frame.uSize, frame.vSize) * 0.017);
+    const start = pointOnStockFace(frame, operation.center_u, operation.center_v);
+    const marker = addAdvancedMarker(start, markerRadius, '#f6a021');
+    marker.userData = { operationId: operation.id, isOperationHelper: true };
+    operationHelpers.push(marker);
+
+    if (operation.type === 'drill_row') {
+        const points = drillRowCenters(operation).map(({ u, v }) => pointOnStockFace(frame, u, v));
+        if (points.length > 1) {
+            advancedGuide([points[0], points.at(-1)], '#287158');
+            addAdvancedMarker(points.at(-1), markerRadius * 0.6, '#287158');
+        }
+        return;
+    }
+
+    const { direction, reach } = pocketScrewPlacement(part, operation);
+    const end = start.clone().addScaledVector(direction, reach);
+    advancedGuide([start, end], '#2478be');
+    if (!props.partContextInstance) return;
+    const { length, width, thickness } = partSize(part);
+    const half = new THREE.Vector3(length / 2, thickness / 2, width / 2);
+    const drillRay = new THREE.Ray(start.clone().addScaledVector(direction, 1e-5), direction);
+    const exit = drillRay.intersectBox(new THREE.Box3(half.clone().negate(), half), new THREE.Vector3());
+    if (!exit || exit.distanceTo(start) >= reach) return;
+    partGroup.updateWorldMatrix(true, false);
+    const ray = new THREE.Raycaster(
+        partGroup.localToWorld(start.clone()), direction.clone().transformDirection(partGroup.matrixWorld),
+        Math.max(0, exit.distanceTo(start) - 1e-4), reach,
+    );
+    const hit = ray.intersectObjects(objectMeshes.filter(mesh => mesh.visible && mesh.userData.instanceId !== props.partContextInstance.id), false)[0];
+    if (hit) addAdvancedMarker(partGroup.worldToLocal(hit.point.clone()), markerRadius, '#2b9873');
+};
+
 const createOperationPreview = (part, operation) => {
     if (operation.enabled === false) return;
 
@@ -793,7 +876,15 @@ const createOperationPreview = (part, operation) => {
     } else if (operation.type === 'drill') {
         createDrillFacePreview(part, operation);
         preview = operationPreviewObject(part, operation);
-    } else if (operation.type === 'edge_roundover') {
+    } else if (isPathMachining(operation.type)) {
+        createContourPreview(part, operation);
+        return;
+    } else if (isFaceMachining(operation.type)) {
+        createAdvancedFacePreview(part, operation);
+        return;
+    } else if (isRetainedShape(operation.type)) {
+        return;
+    } else if (operation.type === 'edge_roundover' || Object.hasOwn(shapingLabels, operation.type)) {
         preview = operationPreviewObject(part, operation);
     } else {
         const { length, width, thickness } = partSize(part);
@@ -806,11 +897,12 @@ const createOperationPreview = (part, operation) => {
         preview.position.copy(plane.point);
     }
 
+    if (!preview) return;
     const isSelected = operation.id === props.selectedOperationId;
     preview.material = new THREE.MeshBasicMaterial({
         color: isSelected ? '#d84d32' : '#d98570',
         transparent: true,
-        opacity: isSelected ? 0.34 : 0.1,
+        opacity: Object.hasOwn(shapingLabels, operation.type) ? 0 : isSelected ? 0.34 : 0.1,
         depthWrite: false,
         side: THREE.DoubleSide,
     });
@@ -1054,10 +1146,12 @@ const rebuildPart = async () => {
     createOperationPreviews(part);
 
     try {
-        const includeOffcut = ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type)
+        const tracing = props.drawingContour && isPathMachining(selectedOperation.value?.type);
+        const includeOffcut = !tracing && hasExactOffcut(selectedOperation.value?.type)
             ? props.selectedOperationId
             : null;
-        const result = await geometryWorker.calculate(part, includeOffcut);
+        const geometryPart = tracing ? { ...part, operations: part.operations.filter(item => item.id !== props.selectedOperationId) } : part;
+        const result = await geometryWorker.calculate(geometryPart, includeOffcut);
 
         if (currentVersion !== rebuildVersion || props.mode !== 'part' || props.activePart?.id !== part.id) {
             result.partGeometry?.dispose();
@@ -1652,6 +1746,64 @@ const roundoverEdgeFromIntersection = (part, intersection) => {
     return candidates.reduce((nearest, candidate) => candidate[1] < nearest[1] ? candidate : nearest)[0];
 };
 
+const pickShapingStock = (raycaster, part) => {
+    const { length, width, thickness } = partSize(part);
+    partGroup.updateWorldMatrix(true, false);
+    const half = new THREE.Vector3(length / 2, thickness / 2, width / 2);
+    const ray = raycaster.ray.clone().applyMatrix4(partGroup.matrixWorld.clone().invert());
+    const point = ray.intersectBox(new THREE.Box3(half.clone().negate(), half), new THREE.Vector3());
+    if (!point) return null;
+
+    const axis = ['x', 'y', 'z'].reduce((best, candidate) =>
+        Math.abs(Math.abs(point[candidate]) - half[candidate]) < Math.abs(Math.abs(point[best]) - half[best]) ? candidate : best);
+    const normal = new THREE.Vector3();
+    normal[axis] = Math.sign(point[axis]);
+    return { object: partGroup, point: partGroup.localToWorld(point), face: { normal } };
+};
+
+const shapingFaceCoordinates = (frame, point) => {
+    const displacement = point.clone().sub(frame.center);
+    return { u: (displacement.dot(frame.u) + frame.uSize / 2) / millimeterScale, v: (displacement.dot(frame.v) + frame.vSize / 2) / millimeterScale };
+};
+
+const pickShapingOperation = (raycaster, operation, event) => {
+    const part = props.activePart;
+    if (isPathMachining(operation.type) && props.drawingContour) {
+        const frame = grooveFaceFrame(part, operation.face);
+        const worldPoint = raycaster.ray.intersectPlane(partFaceDragPlane(partGroup, frame), new THREE.Vector3());
+        if (worldPoint && operation.points.length < (operation.type === 'curve_route' ? 32 : 64)) {
+            const point = shapingFaceCoordinates(frame, partGroup.worldToLocal(worldPoint));
+            emit('update-operation', operation.id, { points: [...operation.points, roundContourPoint({ u: clamp(point.u, -100000, 200000), v: clamp(point.v, -100000, 200000) })] });
+        }
+        return;
+    }
+    const hit = pickShapingStock(raycaster, part);
+    if (!hit) return;
+    const face = grooveFaceFromNormal(hit.face.normal);
+    if (operation.type === 'rabbet' || operation.type === 'edge_chamfer') {
+        const edge = roundoverEdgeFromIntersection(part, hit);
+        if (operation.type === 'edge_chamfer' && event.shiftKey) {
+            emit('add-chamfer-edge', edge);
+            return;
+        }
+        const parameters = operation.type === 'rabbet' ? { edge, face } : { edge };
+        emit('update-operation', operation.id, fitShaping({ ...operation, ...parameters }, part.dimensions));
+        return;
+    }
+    const frame = grooveFaceFrame(part, face);
+    if (['pocket', 'drill_row', 'pocket_screw'].includes(operation.type)) {
+        const { u, v } = roundContourPoint(shapingFaceCoordinates(frame, partGroup.worldToLocal(hit.point)));
+        const draft = { ...operation, face, center_u: u, center_v: v };
+        emit('update-operation', operation.id, operation.type === 'pocket' ? fitShaping(draft, part.dimensions) : fitAdvanced(draft, part.dimensions));
+        return;
+    }
+    if (face !== operation.face) {
+        const original = grooveFaceFrame(part, operation.face);
+        const points = operation.points.map(({ u, v }) => roundContourPoint({ u: u * frame.uSize / original.uSize, v: v * frame.vSize / original.vSize }));
+        emit('update-operation', operation.id, { face, points });
+    }
+};
+
 const pointerDown = (event) => {
     if (props.presentationEnabled) {
         controls.mouseButtons.LEFT = event.altKey ? THREE.MOUSE.ROTATE : null;
@@ -1727,6 +1879,13 @@ const pointerDown = (event) => {
         if (event.button !== 0) return;
 
         const helper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
+        const shaping = selectedOperation.value;
+        if (shaping?.enabled !== false && (Object.hasOwn(shapingLabels, shaping?.type) || isFaceMachining(shaping?.type))
+            && (!helper || (shaping.type === 'edge_chamfer' && event.shiftKey) || (isPathMachining(shaping.type) && props.drawingContour))) {
+            pickShapingOperation(raycaster, shaping, event);
+            event.preventDefault();
+            return;
+        }
 
         if (!helper && selectedOperation.value?.type === 'groove') {
             const stockIntersection = pickPartStock(raycaster);
@@ -1843,12 +2002,12 @@ const pointerDown = (event) => {
 
         emit('select-operation', operation.id);
 
-        if (operation.type === 'edge_roundover') {
+        if (['edge_roundover', 'edge_chamfer'].includes(operation.type)) {
             event.preventDefault();
             return;
         }
 
-        const dragPlane = ['groove', 'plunge_route', 'drill'].includes(operation.type)
+        const dragPlane = (['groove', 'plunge_route', 'drill', 'rabbet', 'pocket', 'jigsaw_cut'].includes(operation.type) || isFaceMachining(operation.type))
             ? partFaceDragPlane(partGroup, grooveFaceFrame(props.activePart, operation.face))
             : new THREE.Plane().setFromNormalAndCoplanarPoint(
                 camera.getWorldDirection(new THREE.Vector3()),
@@ -1867,6 +2026,7 @@ const pointerDown = (event) => {
             grooveHandle: helper.userData.grooveHandle ?? null,
             plungeHandle: helper.userData.plungeHandle ?? null,
             drillHandle: helper.userData.drillHandle ?? null,
+            contourIndex: helper.userData.contourIndex ?? null,
         };
         renderer.domElement.setPointerCapture(event.pointerId);
         renderer.domElement.style.cursor = 'grabbing';
@@ -2023,7 +2183,9 @@ const pointerMove = (event) => {
         if (props.mode === 'part') {
             const raycaster = rayFromEvent(event);
             const hoveredHelper = raycaster.intersectObjects(operationHelpers, false)[0]?.object;
-            const hoveredStock = ['groove', 'edge_roundover', 'plunge_route', 'drill'].includes(selectedOperation.value?.type)
+            const shaping = Object.hasOwn(shapingLabels, selectedOperation.value?.type) || isFaceMachining(selectedOperation.value?.type);
+            const hoveredStock = shaping ? pickShapingStock(raycaster, props.activePart)
+                : ['groove', 'edge_roundover', 'plunge_route', 'drill'].includes(selectedOperation.value?.type)
                 ? pickPartStock(raycaster)?.object
                 : null;
 
@@ -2034,8 +2196,8 @@ const pointerMove = (event) => {
                 scheduleOperationToolHide();
             }
 
-            renderer.domElement.style.cursor = hoveredHelper
-                ? ['groove', 'plunge_route', 'drill'].includes(selectedOperation.value?.type) ? 'grab' : 'pointer'
+            renderer.domElement.style.cursor = props.drawingContour ? 'crosshair' : hoveredHelper
+                ? (['groove', 'plunge_route', 'drill', 'rabbet', 'pocket', 'jigsaw_cut'].includes(selectedOperation.value?.type) || isFaceMachining(selectedOperation.value?.type)) ? 'grab' : 'pointer'
                 : hoveredStock ? 'pointer' : '';
         } else if (props.mode === 'assembly') {
             const connectionObject = connectionsGroup
@@ -2058,6 +2220,30 @@ const pointerMove = (event) => {
     const movement = partGroup.worldToLocal(point).sub(dragState.startPoint);
     const operation = dragState.operation;
     const dimensions = props.activePart.dimensions;
+
+    if (operation.type === 'rabbet') {
+        const { axis, edge, length } = rabbetPlacement(props.activePart, operation);
+        const limit = Math.max(0, (edge.extent - length) / millimeterScale);
+        const start = Number(operation.start) + movement.dot(axis) / millimeterScale;
+        emit('update-operation', operation.id, { start: clamp(Math.round(start * 100) / 100, 0, limit) });
+        return;
+    }
+    if (['pocket', 'jigsaw_cut'].includes(operation.type) || isFaceMachining(operation.type)) {
+        const frame = grooveFaceFrame(props.activePart, operation.face);
+        const u = movement.dot(frame.u) / millimeterScale;
+        const v = movement.dot(frame.v) / millimeterScale;
+        if (!isPathMachining(operation.type)) {
+            const center = roundContourPoint({ u: Number(operation.center_u) + u, v: Number(operation.center_v) + v });
+            const draft = { ...operation, center_u: center.u, center_v: center.v };
+            emit('update-operation', operation.id, operation.type === 'pocket' ? fitShaping(draft, dimensions) : fitAdvanced(draft, dimensions));
+        } else if (dragState.contourIndex !== null) {
+            const points = operation.points.map((point, index) => index !== dragState.contourIndex ? point : roundContourPoint({
+                u: clamp(Number(point.u) + u, -100000, 200000), v: clamp(Number(point.v) + v, -100000, 200000),
+            }));
+            emit('update-operation', operation.id, { points });
+        }
+        return;
+    }
 
     if (operation.type === 'cross_cut') {
         emit('update-operation', operation.id, {
@@ -2472,7 +2658,7 @@ watch(() => props.presentationSettings, settings => {
 }, { deep: true });
 
 watch(() => props.mode === 'part' && props.activePart
-    ? JSON.stringify([props.activePart.id, geometryKey(props.activePart, props.selectedOperationId)])
+    ? JSON.stringify([props.activePart.id, props.drawingContour, geometryKey(props.activePart, props.selectedOperationId)])
     : null, schedulePartRebuild);
 watch(() => JSON.stringify(props.parts.filter(part => part.instances?.length).map(part => (
     [part.id, geometryKey(part), part.instances.map(instance => instance.id)]
@@ -2485,6 +2671,7 @@ watch(() => [props.mode, props.partContextInstance?.id], () => {
     clearMeasurement();
     clearConnectionHelpers();
     if (props.mode === 'assembly') updateConnectionHelpers();
+    if (props.mode === 'part' && selectedOperation.value?.type === 'pocket_screw') schedulePartRebuild();
 });
 watch(() => props.selectedInstanceId, (selectedInstanceId, previousInstanceId) => {
     if (transformState.value && selectedInstanceId !== previousInstanceId) {

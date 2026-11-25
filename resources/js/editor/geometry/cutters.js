@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { ADDITION, Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
+import { shapingCutter } from './shapingCutters.js';
+import { advancedCutter } from './advancedCutters.js';
 import {
     drillPlacement,
     groovePlacement,
@@ -285,7 +287,7 @@ export const operationCutter = (part, operation) => {
     if (operation.type === 'plunge_route') return plungeRouteCutter(part, operation);
     if (operation.type === 'drill') return drillCutter(part, operation);
 
-    return null;
+    return shapingCutter(part, operation) ?? advancedCutter(part, operation);
 };
 
 export const operationPreviewObject = (part, operation) => {

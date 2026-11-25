@@ -2,6 +2,10 @@ import { Box3, DoubleSide, Ray, Vector3 } from 'three';
 import { Brush } from 'three-bvh-csg';
 import { crossCutPlane, ripCutPlane } from './cutters.js';
 import { drillPlacement, grooveFaceFrame, groovePlacement, millimeterScale, plungeRoutePlacement, roundoverEdgeFrame } from './coordinates.js';
+import { pointOnStockFace, shapingOutline } from './shapingCutters.js';
+import { pocketScrewPlacement, routeCenterline } from './advancedCutters.js';
+import { drillRowCenters, isFaceMachining, isRetainedShape, machiningFlag } from '../operations/advancedMachining.js';
+import { shapingLabels } from '../operations/shaping.js';
 import { calculateOutlinePositions } from './partOutline.js';
 
 const basicFaces = ['top', 'left', 'start'];
@@ -34,6 +38,26 @@ const intersectCutWithFace = (frame, plane) => {
 
 const operationMarks = (part) => part.operations.flatMap((operation, index) => {
     const number = index + 1;
+    if (isFaceMachining(operation.type)) {
+        const { face } = operation;
+        const frame = grooveFaceFrame(part, face);
+        if (operation.type === 'drill_row') {
+            const locations = drillRowCenters(operation).map(({ u, v }) => pointOnStockFace(frame, u, v));
+            return [{ number, face, point: locations[0], line: locations, locations }];
+        }
+        if (operation.type === 'pocket_screw') {
+            const { start, direction, reach } = pocketScrewPlacement(part, operation);
+            return [{ number, face, point: start, line: [start, start.clone().addScaledVector(direction, reach)] }];
+        }
+        const points = routeCenterline(operation).map(({ x, y }) => pointOnStockFace(frame, x, y));
+        return points.length ? [{ number, face, point: points[0], line: machiningFlag(operation.closed_path) ? [...points, points[0]] : points }] : [];
+    }
+    if (isRetainedShape(operation.type)) {
+        const frame = grooveFaceFrame(part, 'top');
+        const line = [pointOnStockFace(frame, 0, frame.vSize / millimeterScale / 2),
+            pointOnStockFace(frame, frame.uSize / millimeterScale, frame.vSize / millimeterScale / 2)];
+        return [{ number, face: 'top', point: frame.center, line }];
+    }
     if (operation.type === 'drill') {
         return [{ number, face: operation.face ?? 'top', point: drillPlacement(part, operation).surfacePoint }];
     }
@@ -49,6 +73,14 @@ const operationMarks = (part) => part.operations.flatMap((operation, index) => {
         const edge = operation.edge ?? 'top_left';
         const frame = roundoverEdgeFrame(part, edge);
         return [{ number, face: edge.split('_')[0], point: frame.corner }];
+    }
+    if (Object.hasOwn(shapingLabels, operation.type)) {
+        const outline = shapingOutline(part, operation);
+        if (!outline) return [];
+        const { face, points } = outline;
+        const center = points[0].clone().set(0, 0, 0);
+        points.forEach(point => center.add(point));
+        return [{ number, face, point: center.divideScalar(points.length), line: points }];
     }
     if (operation.type !== 'cross_cut' && operation.type !== 'rip_cut') return [];
     const face = operation.cut_direction === 'bottom_up' ? 'bottom' : 'top';
@@ -180,6 +212,7 @@ export const buildWorkshopDrawing = (part, geometry = null) => {
                 number: mark.number,
                 at: project(frame, mark.point),
                 line: mark.line?.map(point => project(frame, point)),
+                ...(mark.locations ? { locations: mark.locations.map(point => project(frame, point)) } : {}),
             })),
         };
     });

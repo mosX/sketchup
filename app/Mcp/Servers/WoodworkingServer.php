@@ -31,6 +31,10 @@ use Laravel\Mcp\Server\Contracts\Transport;
 
     For JavaScript workflows, get the standalone compiler from woodworking_get_script_api and compile your own script locally. Read the project script revision, then send the source and compiled payload to woodworking_run_project_script for a dry run and commit. Generated fasteners, instruction steps, catalog assignments and render settings travel with the script. Catalog IDs come from woodworking_list_material_catalog.
 
+    For shaping stock, use rabbet, pocket, edge_chamfer or jigsaw_cut in a part's operations, or call rabbet(), pocket(), chamfer() or jigsawCut() on a JavaScript part. Read shaping_operations in woodworking_capabilities for face coordinates, profile fields and contour limits. A jigsaw outline closes implicitly and may extend past an edge to make a notch.
+
+    Read advanced_machining in woodworking_capabilities before using drill_row, pocket_screw, curve_route, taper or turning. Their JavaScript methods are drillRow(), pocketScrew(), curveRoute(), taper() and turn(). The pocket-screw angle is measured from the selected face plane. Taper and turning run along the stock length and keep only material inside the resulting profile.
+
     Use woodworking_export_project to inspect a committed project. PNG returns an inline rendered image by default. Fetch any returned resource_uri via MCP resources/read, or use the revision-pinned HTTP download URL with the same Bearer API key.
 
     Use woodworking_check_assembly_geometry after committing a model to confirm material intersections and fastener reach using applied operations. The basic analysis only flags candidate overlaps by rotated bounds. Check the returned revision and coverage before using a clean result.

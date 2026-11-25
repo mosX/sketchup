@@ -20,7 +20,8 @@ class CapabilityControllerTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.schema_version', 24)
+            ->assertJsonPath('data.schema_version', 26)
+            ->assertJsonPath('data.advanced_machining.script_methods', ['drillRow', 'pocketScrew', 'curveRoute', 'taper', 'turn'])
             ->assertJsonPath('data.assembly_instructions.sequence_check', '/api/v1/projects/{project}/assembly-instructions/check')
             ->assertJsonPath('data.assembly_check.tool', 'woodworking_check_assembly_geometry')
             ->assertJsonPath('data.project_export.formats', ['obj', 'glb', 'png'])
@@ -34,6 +35,10 @@ class CapabilityControllerTest extends TestCase
             ->assertJsonPath('data.part_operations.plunge_route.7', 'cutter_profile')
             ->assertJsonPath('data.part_operations.drill.3', 'diameter')
             ->assertJsonPath('data.part_operations.drill.5', 'through')
+            ->assertJsonPath('data.part_operations.rabbet.3', 'cut_length')
+            ->assertJsonPath('data.shaping_operations.pocket.shapes', ['rectangle', 'circle'])
+            ->assertJsonPath('data.shaping_operations.edge_chamfer.angle_degrees', 45)
+            ->assertJsonPath('data.shaping_operations.jigsaw_cut.points_per_contour', [3, 64])
             ->assertJsonPath('data.part_operation_optional_fields.drill.0', 'bottom_diameter')
             ->assertJsonPath('data.fasteners.drilling.2', 'countersink')
             ->assertJsonPath('data.assembly_groups.supports_nested_groups', true)

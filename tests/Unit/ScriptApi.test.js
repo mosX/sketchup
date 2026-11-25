@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { assemblyScript, compileProjectScriptPayload, createScriptApi, joineryScript, machiningScript, starterScript } from '../../resources/js/editor/scriptApi.js';
+import { assemblyScript, compileProjectScriptPayload, createScriptApi, joineryScript, machiningScript, parametricBoxScript, starterScript } from '../../resources/js/editor/scriptApi.js';
 import { createScriptTransforms } from '../../resources/js/editor/scriptTransforms.js';
 import { runScript } from '../../resources/js/editor/scriptSandbox.js';
 
@@ -19,6 +19,38 @@ test('the standalone compiler produces a ready-to-apply script payload', () => {
     assert.equal(compiled.render_settings.finish, 'oil');
     assert.equal(compiled.source, assemblyScript);
     assert.ok(!('logs' in compiled));
+});
+
+test('box dimensions resize the panels and keep the lid cleats clear of the walls', () => {
+    for (const [input, dimensions] of [[{}, [630, 430, 240, 18]], [{ length: 900, width: 500, height: 320, thickness: 22 }, [900, 500, 320, 22]]]) {
+        const [length, width, height, thickness] = dimensions;
+        const compiled = compileProjectScriptPayload(parametricBoxScript, input);
+        const parts = compiled.commands.filter(command => command.type === 'create_part');
+        const instances = compiled.commands.filter(command => command.type === 'create_instance');
+        const [bottom, longWall, endWall, lid, cleat] = parts.map(command => command.data);
+        assert.deepEqual([bottom.length, bottom.width, bottom.thickness], [length, width, thickness]);
+        assert.equal(bottom.operations.length, 8);
+        assert.equal(longWall.operations.length, 4);
+        assert.equal(longWall.width, height - 2 * thickness);
+        assert.equal(endWall.length, width - 2 * thickness);
+        assert.equal(lid.width - 2 * thickness - cleat.length, 4);
+        const installedCleats = instances.filter(command => command.part_ref === parts[4].temporary_id);
+        for (const { data } of installedCleats) {
+            assert.equal(length / 2 - thickness - (Math.abs(data.position_x) + cleat.width / 2), 2);
+            assert.equal(data.position_z + cleat.thickness / 2, height - thickness);
+        }
+        assert.equal(instances.length, 8);
+        assert.equal(new Set(compiled.assembly_steps.flatMap(step => step.instance_refs)).size, instances.length);
+    }
+});
+
+test('the box uses the selected screw to generate clearance and pilot holes for both assembly steps', () => {
+    const screw = { screwId: 25, screwDiameter: 4, screwLength: 40, thickness: 22 };
+    const compiled = compileProjectScriptPayload(parametricBoxScript, screw);
+    assert.equal(compiled.fasteners.reduce((count, { placement }) => count + placement.count, 0), 16);
+    assert.ok(compiled.fasteners.every(({ placement, drilling }) => placement.catalog_material_id === 25 && drilling.pilot && drilling.clearance_diameter === 4.5));
+    assert.deepEqual(compiled.assembly_steps.map(step => step.fastener_refs?.length ?? 0), [4, 4, 0]);
+    assert.throws(() => compileProjectScriptPayload(parametricBoxScript, { ...screw, screwLength: 20 }), /28–62 мм/);
 });
 
 test('assembly steps resolve nested groups and fastener rows and assignments use definition handles', () => {

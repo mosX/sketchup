@@ -14,6 +14,99 @@ class PartDefinitionControllerTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
+    public function test_advanced_machining_is_saved_with_face_and_profile_coordinates(): void
+    {
+        $project = Project::factory()->create();
+        Sanctum::actingAs($project->user);
+        $operations = [
+            ['type' => 'drill_row', 'face' => 'top', 'center_u' => 25, 'center_v' => 30, 'path_angle' => 0, 'diameter' => 5, 'depth' => 8, 'through' => false, 'hole_count' => 4, 'hole_spacing' => 32],
+            ['type' => 'pocket_screw', 'face' => 'top', 'center_u' => 140, 'center_v' => 50, 'path_angle' => 0, 'entry_angle' => 15, 'diameter' => 9, 'depth' => 20, 'pilot_diameter' => 4, 'pilot_length' => 35],
+            ['type' => 'curve_route', 'face' => 'top', 'points' => [['u' => 25, 'v' => 60], ['u' => 90, 'v' => 70]], 'closed_path' => false, 'cutter_diameter' => 8, 'depth' => 4, 'cutter_profile' => 'v_groove', 'cutter_angle' => 60],
+            ['type' => 'taper', 'taper_sides' => 'two', 'start_width' => 100, 'end_width' => 60],
+            ['type' => 'turning', 'stations' => [['at' => 0, 'diameter' => 20], ['at' => 200, 'diameter' => 10]]],
+        ];
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Machined stock', 'length' => 200, 'width' => 100, 'thickness' => 24, 'grain_axis' => 'length', 'operations' => $operations,
+        ]);
+
+        $response->assertCreated()->assertJsonPath('data.operations.4.stations.1.at', 200);
+        $saved = $project->partDefinitions()->sole()->operations;
+        $this->assertCount(count($operations), $saved);
+        foreach ($operations as $index => $operation) {
+            ksort($operation);
+            ksort($saved[$index]);
+            $this->assertSame($operation, $saved[$index]);
+        }
+    }
+
+    public function test_invalid_advanced_machining_returns_422_and_keeps_stock_unchanged(): void
+    {
+        $project = Project::factory()->create();
+        Sanctum::actingAs($project->user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Invalid stock', 'length' => 200, 'width' => 100, 'thickness' => 24, 'grain_axis' => 'length', 'operations' => [
+                ['type' => 'drill_row', 'face' => 'top', 'center_u' => 25, 'center_v' => 30, 'path_angle' => 0, 'diameter' => 5, 'depth' => 8, 'through' => false, 'hole_count' => 12, 'hole_spacing' => 32],
+                ['type' => 'pocket_screw', 'face' => 'top', 'center_u' => 140, 'center_v' => 50, 'path_angle' => 0, 'entry_angle' => 15, 'diameter' => 9, 'depth' => 20, 'pilot_diameter' => 10, 'pilot_length' => 35],
+                ['type' => 'curve_route', 'face' => 'top', 'points' => [['u' => 1, 'v' => 60], ['u' => 90, 'v' => 70]], 'closed_path' => false, 'cutter_diameter' => 8, 'depth' => 4, 'cutter_profile' => 'straight', 'cutter_angle' => 0],
+                ['type' => 'taper', 'taper_sides' => 'two', 'start_width' => 110, 'end_width' => 60],
+                ['type' => 'turning', 'stations' => [['at' => 0, 'diameter' => 25], ['at' => 170, 'diameter' => 10]]],
+                ['type' => 'curve_route', 'face' => 'top', 'points' => [['u' => 20, 'v' => 20], ['u' => 75, 'v' => 80], ['u' => 20, 'v' => 80], ['u' => 75, 'v' => 20]], 'closed_path' => false, 'cutter_diameter' => 8, 'depth' => 4, 'cutter_profile' => 'straight', 'cutter_angle' => 0],
+            ],
+        ]);
+
+        $response->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.hole_count', 'operations.1.pilot_diameter', 'operations.2.points.0',
+            'operations.3.start_width', 'operations.4.stations.0.diameter', 'operations.4.stations.1.at', 'operations.5.points',
+        ]);
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_shaping_operations_persist_dimensions_and_allow_an_open_edge_notch(): void
+    {
+        $project = Project::factory()->create();
+        Sanctum::actingAs($project->user);
+        $operations = [
+            ['type' => 'rabbet', 'face' => 'left', 'edge' => 'top_left', 'start' => 10, 'cut_length' => 50, 'width' => 8, 'depth' => 6],
+            ['type' => 'pocket', 'face' => 'top', 'pocket_shape' => 'circle', 'center_u' => 100, 'center_v' => 50, 'diameter' => 20, 'depth' => 10],
+            ['type' => 'edge_chamfer', 'edge' => 'top_end', 'width' => 14],
+            ['type' => 'jigsaw_cut', 'face' => 'top', 'points' => [['u' => 130, 'v' => -10], ['u' => 170, 'v' => -10], ['u' => 150, 'v' => 30]]],
+        ];
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Worked panel', 'length' => 200, 'width' => 100, 'thickness' => 24, 'grain_axis' => 'length', 'operations' => $operations,
+        ]);
+
+        $response->assertCreated()->assertJsonPath('data.operations.3.points.0.v', -10);
+        $saved = $project->partDefinitions()->sole()->operations;
+        $this->assertSame(['rabbet', 'pocket', 'edge_chamfer', 'jigsaw_cut'], array_column($saved, 'type'));
+        $this->assertSame(50, $saved[0]['cut_length']);
+        $this->assertSame(10, $saved[1]['depth']);
+        $this->assertSame(14, $saved[2]['width']);
+    }
+
+    public function test_impossible_shaping_operations_return_422_without_saving_a_part(): void
+    {
+        $project = Project::factory()->create();
+        Sanctum::actingAs($project->user);
+
+        $response = $this->postJson("/api/projects/{$project->id}/parts", [
+            'name' => 'Worked panel', 'length' => 200, 'width' => 100, 'thickness' => 24, 'grain_axis' => 'length',
+            'operations' => [
+                ['type' => 'rabbet', 'face' => 'top', 'edge' => 'top_left', 'start' => 180, 'cut_length' => 50, 'width' => 8, 'depth' => 6],
+                ['type' => 'pocket', 'face' => 'top', 'pocket_shape' => 'rectangle', 'center_u' => 100, 'center_v' => 50, 'pocket_length' => 40, 'width' => 30, 'depth' => 24],
+                ['type' => 'edge_chamfer', 'edge' => 'top_end', 'width' => 24],
+                ['type' => 'jigsaw_cut', 'face' => 'top', 'points' => [['u' => 20, 'v' => 20], ['u' => 60, 'v' => 60], ['u' => 20, 'v' => 60], ['u' => 60, 'v' => 20]]],
+            ],
+        ]);
+
+        $response->assertUnprocessable()->assertJsonValidationErrors([
+            'operations.0.cut_length', 'operations.1.depth', 'operations.2.width', 'operations.3.points',
+        ]);
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
     public function test_unauthenticated_request_returns_401(): void
     {
         $project = Project::factory()->create();
