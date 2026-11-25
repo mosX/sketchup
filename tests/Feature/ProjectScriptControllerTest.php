@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\CatalogMaterial;
 use App\Models\PartDefinition;
 use App\Models\PartInstance;
 use App\Models\Project;
@@ -25,6 +26,81 @@ class ProjectScriptControllerTest extends TestCase
         $this->assertDatabaseCount('assembly_groups', 0);
         $this->assertNull($project->fresh()->script_data);
         $this->assertSame(1, $project->fresh()->revision);
+    }
+
+    public function test_script_hardware_machining_stock_and_steps_apply_replace_and_restore_together(): void
+    {
+        $project = $this->ownedProject();
+        $stock = CatalogMaterial::factory()->create(['user_id' => $project->user_id]);
+        $screw = CatalogMaterial::factory()->consumable()->create([
+            'user_id' => $project->user_id,
+            'fastener_type' => 'screw', 'fastener_diameter' => 3.4, 'fastener_length' => 40,
+        ]);
+        $guide = [['title' => 'Prepare the workbench', 'instance_ids' => []]];
+        $plan = ['default_material_id' => $stock->id, 'assignments' => [], 'supplies' => []];
+        $project->forceFill(['assembly_instructions' => $guide, 'material_plan' => $plan])->save();
+        $path = "/api/v1/projects/{$project->id}/script/run";
+        $payload = $this->payload();
+        $payload['commands'][] = ['type' => 'create_instance', 'temporary_id' => 'lid', 'part_ref' => 'panel', 'data' => ['position_z' => 36]];
+        $payload['fasteners'] = [[
+            'ref' => 'lid-screws', 'source_ref' => 'lid', 'target_ref' => 'instance',
+            'placement' => ['catalog_material_id' => $screw->id, 'face' => 'top', 'center_u' => 50, 'center_v' => 40, 'sink' => 0, 'count' => 2, 'row_axis' => 'u', 'spacing' => 50],
+            'drilling' => ['clearance_diameter' => 4, 'pilot' => true, 'pilot_diameter' => 2, 'pilot_depth' => 8],
+        ]];
+        $payload['materials'] = ['assignments' => [['part_ref' => 'panel', 'material_id' => $stock->id]]];
+        $payload['assembly_steps'] = [[
+            'title' => 'Fix the lid', 'notes' => 'Align the corners.',
+            'instance_refs' => ['lid'], 'highlight_refs' => ['instance', 'lid'], 'fastener_refs' => ['lid-screws'],
+            'camera' => ['position' => ['x' => 400, 'y' => -500, 'z' => 280], 'target' => ['x' => 0, 'y' => 0, 'z' => 20]],
+        ]];
+        $payload['render_settings'] = ['wood' => 'spruce', 'exposure' => -0.5];
+
+        $this->postJson($path, [...$payload, 'dry_run' => true])->assertOk()
+            ->assertJsonCount(2, 'data.fasteners')
+            ->assertJsonCount(2, 'data.material_plan.assignments')
+            ->assertJsonPath('data.assembly_steps.0.notes', 'Align the corners.');
+        $this->assertSame($guide, $project->fresh()->assembly_instructions);
+        $this->assertDatabaseCount('project_fasteners', 0);
+
+        $result = $this->postJson($path, $payload)->assertOk()->assertJsonPath('data.revision', 2)
+            ->assertJsonPath('data.render_settings.wood', 'spruce')->json('data');
+        $fastenerIds = array_column($result['fasteners'], 'id');
+        $this->assertSame($fastenerIds, $project->fresh()->assembly_instructions[1]['fastener_ids']);
+        $this->assertSame(2, $project->partDefinitions()->count());
+        $this->assertSame(6, $project->partDefinitions()->get()->sum(fn (PartDefinition $part): int => count($part->operations)));
+        $version = $this->postJson("/api/projects/{$project->id}/versions", ['expected_revision' => 2])->assertCreated()->json('data.id');
+        $this->postJson($path, [...$payload, 'expected_revision' => 2])->assertOk()->assertJsonPath('data.revision', 3);
+        $this->assertSame(2, $project->projectFasteners()->count());
+        $this->postJson("/api/projects/{$project->id}/versions/{$version}/restore", ['expected_revision' => 3])->assertOk();
+        $this->assertSame($fastenerIds, $project->fresh()->assembly_instructions[1]['fastener_ids']);
+
+        $this->postJson($path, [...$result['previous'], 'expected_revision' => 4])->assertOk()->assertJsonPath('data.revision', 5);
+        $this->assertSame($guide, $project->fresh()->assembly_instructions);
+        $this->assertSame($plan, $project->fresh()->material_plan);
+        $this->assertDatabaseCount('project_fasteners', 0);
+        $this->assertDatabaseCount('part_definitions', 0);
+    }
+
+    public function test_manually_modified_guide_prevents_replacing_it_and_foreign_catalog_ids_roll_back(): void
+    {
+        $project = $this->ownedProject();
+        $path = "/api/v1/projects/{$project->id}/script/run";
+        $base = $this->payload();
+        $foreignMaterial = CatalogMaterial::factory()->create();
+        $this->postJson($path, [...$base, 'materials' => ['default_material_id' => $foreignMaterial->id]])
+            ->assertUnprocessable()->assertJsonValidationErrors('materials.default_material_id');
+        $this->assertDatabaseCount('part_definitions', 0);
+        $base['assembly_steps'] = [['title' => 'Mount', 'instance_refs' => ['instance']]];
+        $this->postJson($path, $base)->assertOk();
+        $steps = $project->fresh()->assembly_instructions;
+        $steps[0]['notes'] = 'Keep this manual edit.';
+        $this->putJson("/api/v1/projects/{$project->id}/assembly-instructions", [
+            'steps' => $steps, 'dry_run' => false, 'expected_revision' => 2,
+        ])->assertOk();
+        $this->postJson($path, [...$base, 'expected_revision' => 3])
+            ->assertUnprocessable()->assertJsonValidationErrors('commands');
+        $this->assertSame('Keep this manual edit.', $project->fresh()->assembly_instructions[0]['notes']);
+        $this->assertDatabaseCount('part_definitions', 1);
     }
 
     public function test_apply_replace_and_undo_preserve_unrelated_parts(): void

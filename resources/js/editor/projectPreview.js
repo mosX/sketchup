@@ -19,7 +19,24 @@ const down = [front[0] * Math.sin(elevation), front[1] * Math.sin(elevation), -M
 const dot = (a, b) => a.reduce((sum, value, index) => sum + value * b[index], 0);
 const xyz = value => ['x', 'y', 'z'].map(axis => Number(value[axis]));
 
-export const projectPreviewFaces = ({ parts = [], assembly_groups: groups = [] }) => {
+const previewAxes = (camera) => {
+    if (!camera) return { depth, right, down };
+    const target = xyz(camera.target);
+    const delta = xyz(camera.position).map((value, index) => value - target[index]);
+    const length = Math.hypot(...delta);
+    if (!length) return { depth, right, down };
+    const [x, y, z] = delta.map(value => value / length);
+    const horizontal = Math.hypot(x, y);
+    const cameraRight = horizontal > 1e-6 ? [-y / horizontal, x / horizontal, 0] : [1, 0, 0];
+    return {
+        depth: [x, y, z],
+        right: cameraRight,
+        down: [cameraRight[1] * z, -cameraRight[0] * z, cameraRight[0] * y - cameraRight[1] * x],
+    };
+};
+
+export const projectPreviewFaces = ({ parts = [], assembly_groups: groups = [] }, camera = null) => {
+    const axes = previewAxes(camera);
     const visibleIds = new Set(assemblyInstanceState(groups, parts).visibleInstanceIds);
     const faces = [];
 
@@ -34,13 +51,14 @@ export const projectPreviewFaces = ({ parts = [], assembly_groups: groups = [] }
             const vertices = corners.map(corner => add(center, transform(corner.map((sign, axis) => sign * half[axis]))));
             for (const [indices, normal] of sides) {
                 const worldNormal = transform(normal);
-                if (dot(worldNormal, depth) <= 1e-6) continue;
+                if (dot(worldNormal, axes.depth) <= 1e-6) continue;
 
                 const points = indices.map(index => vertices[index]);
                 faces.push({
                     partId: part.id,
-                    points: points.map(point => [dot(point, right), dot(point, down)]),
-                    depth: points.reduce((sum, point) => sum + dot(point, depth), 0) / points.length,
+                    instanceId: instance.id,
+                    points: points.map(point => [dot(point, axes.right), dot(point, axes.down)]),
+                    depth: points.reduce((sum, point) => sum + dot(point, axes.depth), 0) / points.length,
                     color: `hsl(31 43% ${48 + 25 * Math.max(0, dot(worldNormal, [-0.3, -0.55, 0.78])) + (part.id % 4) * 1.5}%)`,
                 });
             }

@@ -198,6 +198,12 @@ export const useProjectsStore = defineStore('projects', {
             return data.data;
         },
 
+        async checkAssemblyGeometry(projectId, revision) {
+            const { data } = await axios.get(`/v1/projects/${projectId}/assembly-check`, { params: { expected_revision: revision } });
+
+            return data.data;
+        },
+
         async createAssemblyGroup(projectId, payload) {
             const { data } = await axios.post(`/projects/${projectId}/assembly-groups`, payload);
             this.assemblyGroups.push(data.data);

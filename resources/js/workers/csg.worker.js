@@ -1,5 +1,6 @@
 import { createCsgContext, createOffcutGeometry, createPartGeometry } from '../editor/geometry/csg.js';
 import { serializeGeometry } from '../editor/geometry/transfer.js';
+import { calculateOutlinePositions } from '../editor/geometry/partOutline.js';
 
 self.onmessage = ({ data }) => {
     const { id, part, includeOffcut } = data;
@@ -15,8 +16,8 @@ self.onmessage = ({ data }) => {
         offcutGeometry = selectedOperation
             ? createOffcutGeometry(part, selectedOperation, context)
             : null;
-        const serializedPart = serializeGeometry(partGeometry);
-        const serializedOffcut = serializeGeometry(offcutGeometry);
+        const serializedPart = serializeGeometry(partGeometry, calculateOutlinePositions(partGeometry));
+        const serializedOffcut = offcutGeometry ? serializeGeometry(offcutGeometry, calculateOutlinePositions(offcutGeometry)) : null;
         const transfers = [...new Set([
             ...(serializedPart?.transfers ?? []),
             ...(serializedOffcut?.transfers ?? []),

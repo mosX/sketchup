@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { createScriptApi, joineryScript, machiningScript, starterScript } from '../../resources/js/editor/scriptApi.js';
+import { assemblyScript, compileProjectScriptPayload, createScriptApi, joineryScript, machiningScript, starterScript } from '../../resources/js/editor/scriptApi.js';
 import { createScriptTransforms } from '../../resources/js/editor/scriptTransforms.js';
 import { runScript } from '../../resources/js/editor/scriptSandbox.js';
 
@@ -10,6 +10,41 @@ const execute = (source) => {
     vm.runInNewContext(source, api, { timeout: 100 });
     return api.result();
 };
+
+test('the standalone compiler produces a ready-to-apply script payload', () => {
+    const compiled = compileProjectScriptPayload(assemblyScript);
+    assert.equal(compiled.assembly_steps.length, 2);
+    assert.equal(compiled.assembly_steps[1].highlight_refs.length, 2);
+    assert.deepEqual(compiled.assembly_steps[1].camera.target, { x: 0, y: 0, z: 20 });
+    assert.equal(compiled.render_settings.finish, 'oil');
+    assert.equal(compiled.source, assemblyScript);
+    assert.ok(!('logs' in compiled));
+});
+
+test('assembly steps resolve nested groups and fastener rows and assignments use definition handles', () => {
+    const api = createScriptApi();
+    const part = api.part('Board', { length: 400, width: 100, thickness: 24 }).stock(3);
+    const root = api.group('Root');
+    const source = root.add(part);
+    const target = api.group('Child', root).add(part);
+    const row = api.fastener(source, { catalog_material_id: 8, count: 2, row_axis: 'u', spacing: 30, center_u: 50, center_v: 30, rowTargets: [target, null] });
+    row.prepareDrilling({ clearance_diameter: 4 });
+    api.mirror(root, { axis: 'x' });
+    api.supply(8, 0.125);
+    api.supply(8, 0.25);
+    api.assemblyStep('Join', { parts: [root, source], highlight: [], fasteners: [row] });
+    const result = api.result();
+
+    assert.deepEqual(result.assembly_steps[0].instance_refs, [source.id, target.id]);
+    assert.deepEqual(result.assembly_steps[0].highlight_refs, []);
+    assert.deepEqual(result.assembly_steps[0].fastener_refs, [row.id]);
+    assert.deepEqual(result.fasteners[0].row_target_refs, [target.id, null]);
+    assert.equal(result.fasteners.length, 2);
+    assert.notEqual(result.fasteners[1].source_ref, source.id);
+    assert.equal(result.fasteners[1].drilling.clearance_diameter, 4);
+    assert.deepEqual(result.materials.assignments, [{ part_ref: result.commands[0].temporary_id, material_id: 3 }]);
+    assert.deepEqual(result.materials.supplies, [{ material_id: 8, quantity: 0.375 }]);
+});
 
 test('bench example reuses one leg definition for four Z-up instances', () => {
     const { commands, logs } = execute(starterScript);

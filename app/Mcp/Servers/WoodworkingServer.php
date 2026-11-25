@@ -2,6 +2,11 @@
 
 namespace App\Mcp\Servers;
 
+use App\Mcp\ProjectExportResource;
+use App\Mcp\Tools\AssemblyInstructionTools;
+use App\Mcp\Tools\FastenerTools;
+use App\Mcp\Tools\MaterialTools;
+use App\Mcp\Tools\ScriptTools;
 use App\Mcp\Tools\WoodworkingApiTool;
 use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\Attributes\Instructions;
@@ -10,17 +15,63 @@ use Laravel\Mcp\Server\Attributes\Version;
 use Laravel\Mcp\Server\Contracts\Transport;
 
 #[Name('sketchup-woodworking')]
-#[Version('1.0.0')]
-#[Instructions('Read woodworking_capabilities before designing. Use dry_run before committing a command batch.')]
+#[Version('1.6.0')]
+#[Instructions(<<<'TEXT'
+    Read woodworking_capabilities before designing. Use dry_run before committing a command batch.
+
+    For hardware, get the project snapshot and list the material catalog using a global key. To place a screw or nail, provide the catalog ID, the instance holding the head, its stock face, face-local U/V coordinates and sink in millimeters. Instance IDs are distinct from part definition IDs.
+
+    Preview placement or copying before committing with dry_run=false and the returned expected_revision. In a placement preview, suggest_targets=true checks shaped stock and returns proposed target IDs in row order. Use row_target_instance_ids to assign them, with null for unlinked points. Copy target lists follow ascending original fastener ID, even when reflecting a row.
+
+    Installed fasteners count toward the bill of materials. Use woodworking_prepare_fastener_drilling separately for screw clearance, pilot holes and countersinks. Use woodworking_analyze_fasteners to check installed hardware against saved machining and review any approximate results.
+
+    Use woodworking_create_catalog_material and woodworking_update_catalog_material for account-wide boards, sheets and consumables. Read woodworking_get_project_materials before updating a project. Keep existing entries you want to retain in the full plan, preview with woodworking_update_project_materials and commit with the returned revision.
+
+    Read woodworking_get_assembly_instructions before authoring assembly steps. Use woodworking_get_project for instance and fastener IDs. Treat the group-based suggestions as a starting point; choose a practical assembly order, name each action, and use notes for checks or alignment details. Send the complete ordered list to woodworking_update_assembly_instructions, review the dry run, then commit with its revision. Cameras use world coordinates in millimeters with Z up.
+
+    For JavaScript workflows, get the standalone compiler from woodworking_get_script_api and compile your own script locally. Read the project script revision, then send the source and compiled payload to woodworking_run_project_script for a dry run and commit. Generated fasteners, instruction steps, catalog assignments and render settings travel with the script. Catalog IDs come from woodworking_list_material_catalog.
+
+    Use woodworking_export_project to inspect a committed project. PNG returns an inline rendered image by default. Fetch any returned resource_uri via MCP resources/read, or use the revision-pinned HTTP download URL with the same Bearer API key.
+
+    Use woodworking_check_assembly_geometry after committing a model to confirm material intersections and fastener reach using applied operations. The basic analysis only flags candidate overlaps by rotated bounds. Check the returned revision and coverage before using a clean result.
+
+    Use woodworking_check_assembly_sequence after saving assembly instructions to catch missing parts, missing hardware and fasteners scheduled before their supporting parts.
+    TEXT)]
 class WoodworkingServer extends Server
 {
-    public int $defaultPaginationLength = 25;
+    public int $defaultPaginationLength = 50;
+
+    protected array $resources = [ProjectExportResource::class];
 
     public function __construct(Transport $transport)
     {
         parent::__construct($transport);
 
         $this->tools = [
+            ...AssemblyInstructionTools::all(),
+            ...ScriptTools::all(),
+            ...FastenerTools::all(),
+            ...MaterialTools::all(),
+            new WoodworkingApiTool(
+                'woodworking_export_project',
+                'Export the visible assembly with applied machining and hardware. Returns an MCP resource URI and an authenticated HTTP download URL pinned to the project revision. PNG also returns an inline image unless inline_preview is false. OBJ coordinates are millimeters; GLB uses meters and includes wood textures.',
+                'GET',
+                '/projects/{project_id}/export',
+                [
+                    'type' => 'object',
+                    'properties' => [
+                        'project_id' => ['type' => 'integer', 'minimum' => 1],
+                        'format' => ['enum' => ['obj', 'glb', 'png']],
+                        'view' => ['enum' => ['isometric', 'front', 'rear', 'side', 'top']],
+                        'width' => ['type' => 'integer', 'minimum' => 320, 'maximum' => 2048],
+                        'height' => ['type' => 'integer', 'minimum' => 240, 'maximum' => 2048],
+                        'expected_revision' => ['type' => 'integer', 'minimum' => 1],
+                        'inline_preview' => ['type' => 'boolean', 'default' => true],
+                    ],
+                    'required' => ['project_id', 'format'],
+                    'additionalProperties' => false,
+                ],
+            ),
             new WoodworkingApiTool(
                 'woodworking_capabilities',
                 'Read supported coordinate conventions, woodworking operations, batch commands, and limits before designing a project.',
@@ -112,6 +163,21 @@ class WoodworkingServer extends Server
                 [
                     'type' => 'object',
                     'properties' => ['project_id' => ['type' => 'integer', 'minimum' => 1]],
+                    'required' => ['project_id'],
+                    'additionalProperties' => false,
+                ],
+            ),
+            new WoodworkingApiTool(
+                'woodworking_check_assembly_geometry',
+                'Check material intersections after applied cuts and fastener reach in the saved assembly. Includes hidden instances. Results include intersection bounds and volume, fastener IDs, and coverage. Review partial coverage before treating the assembly as clear.',
+                'GET',
+                '/projects/{project_id}/assembly-check',
+                [
+                    'type' => 'object',
+                    'properties' => [
+                        'project_id' => ['type' => 'integer', 'minimum' => 1],
+                        'expected_revision' => ['type' => 'integer', 'minimum' => 1],
+                    ],
                     'required' => ['project_id'],
                     'additionalProperties' => false,
                 ],

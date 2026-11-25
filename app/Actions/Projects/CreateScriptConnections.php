@@ -35,6 +35,7 @@ class CreateScriptConnections
             $connection = $project->projectConnections()->create([
                 'primary_instance_id' => $primaryId, 'secondary_instance_id' => $secondaryId,
                 'type' => $data['type'], 'label' => $data['label'] ?? '', 'parameters' => $data['parameters'] ?? [],
+                'note' => $data['note'] ?? null, 'is_verified' => $data['is_verified'] ?? false,
             ]);
             if ($data['generate_machining'] ?? false) {
                 $this->machining->handle($project, $connection);

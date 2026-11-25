@@ -12,7 +12,8 @@ export const useProjectScripts = ({ projectId, projects, recordHistory, onApplie
     };
     const applyScript = async (payload) => {
         const { data } = await axios.post(`/projects/${projectId}/script/run`, payload);
-        const next = structuredClone({ source: payload.source, commands: payload.commands, connections: payload.connections ?? [], parameter_values: payload.parameter_values ?? {} });
+        const next = structuredClone(payload);
+        delete next.dry_run;
         recordHistory({
             label: 'Применение сценария',
             undo: () => replay(data.data.previous),

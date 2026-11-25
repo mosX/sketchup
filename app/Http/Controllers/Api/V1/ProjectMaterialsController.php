@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Exceptions\ProjectRevisionConflictException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ProjectAnalysisRequest;
 use App\Http\Requests\UpdateProjectMaterialsRequest;
@@ -18,22 +19,31 @@ class ProjectMaterialsController extends Controller
     {
         Gate::authorize('view', $project);
 
-        return response()->json(['data' => $project->material_plan]);
+        return response()->json(['data' => $project->material_plan, 'revision' => $project->revision]);
     }
 
     public function update(UpdateProjectMaterialsRequest $request, Project $project): JsonResponse
     {
-        $plan = $request->validated();
-        DB::transaction(function () use ($project, $plan): void {
+        $plan = $request->safe()->only(['default_material_id', 'assignments', 'supplies']);
+        $expected = $request->validated('expected_revision');
+        $dryRun = $request->boolean('dry_run');
+        $revision = DB::transaction(function () use ($project, $plan, $expected, $dryRun): int {
             $locked = Project::query()->lockForUpdate()->findOrFail($project->id);
-            $locked->material_plan = $plan;
-            if ($locked->isDirty('material_plan')) {
-                $locked->revision++;
-                $locked->save();
+            if ($expected !== null && (int) $expected !== $locked->revision) {
+                throw new ProjectRevisionConflictException((int) $expected, $locked->revision);
             }
+            if (! $dryRun) {
+                $locked->material_plan = $plan;
+                if ($locked->isDirty('material_plan')) {
+                    $locked->revision++;
+                    $locked->save();
+                }
+            }
+
+            return $locked->revision;
         }, attempts: 3);
 
-        return response()->json(['data' => $plan]);
+        return response()->json(['data' => $plan, 'revision' => $revision]);
     }
 
     public function estimates(Project $project): JsonResponse

@@ -15,7 +15,7 @@ class CapabilityController extends Controller
         return response()->json([
             'data' => [
                 'api_version' => 'v1',
-                'schema_version' => 18,
+                'schema_version' => 24,
                 'coordinate_system' => [
                     'units' => 'millimeters',
                     'angles' => 'degrees',
@@ -40,6 +40,28 @@ class CapabilityController extends Controller
                     'supports_nested_groups' => true,
                     'delete_contents_is_explicit' => true,
                 ],
+                'assembly_instructions' => [
+                    'step_fields' => ['title', 'instruction', 'notes', 'instance_ids', 'highlight_instance_ids', 'fastener_ids', 'camera'],
+                    'endpoint' => '/api/v1/projects/{project}/assembly-instructions',
+                    'sequence_check' => '/api/v1/projects/{project}/assembly-instructions/check',
+                    'max_steps' => 200,
+                    'camera' => ['fields' => ['position', 'target'], 'units' => 'millimeters', 'up_axis' => 'z'],
+                    'supports_group_based_suggestions' => true,
+                    'preview_and_commit' => ['dry_run', 'expected_revision'],
+                ],
+                'project_scripts' => [
+                    'compiler' => '/api/v1/script-api',
+                    'run' => '/api/v1/projects/{project}/script/run',
+                    'sections' => ['commands', 'connections', 'fasteners', 'materials', 'assembly_steps', 'render_settings'],
+                    'transaction' => ['dry_run', 'expected_revision'],
+                    'runs_javascript_on_server' => false,
+                ],
+                'project_export' => [
+                    'endpoint' => '/api/v1/projects/{project}/export',
+                    'formats' => ['obj', 'glb', 'png'],
+                    'supports_inline_mcp_png' => true,
+                    'views' => ['isometric', 'front', 'rear', 'side', 'top'],
+                ],
                 'instance_transforms' => [
                     'optional_part_reference' => ['part_id', 'part_ref'],
                     'part_replacement_requires_no_connections' => true,
@@ -50,10 +72,25 @@ class CapabilityController extends Controller
                     'cutting_settings' => ['kerf_mm', 'edge_margin_mm', 'linear_stock_length_mm', 'sheet_length_mm', 'sheet_width_mm'],
                     'cutting_map_is_preliminary' => true,
                 ],
+                'assembly_check' => [
+                    'endpoint' => '/api/v1/projects/{project}/assembly-check',
+                    'tool' => 'woodworking_check_assembly_geometry',
+                    'checks' => ['solid_intersections_after_machining', 'fastener_reach_after_machining'],
+                    'ignores_draft_operations' => true,
+                    'checks_hidden_instances' => true,
+                    'minimum_penetration_mm' => 0.01,
+                    'minimum_overlap_volume_mm3' => 0.01,
+                    'reports_partial_results' => true,
+                ],
                 'project_templates' => [
                     'parameters' => ['width_x', 'depth_y', 'height_z'],
                     'preserves' => ['part_operations', 'assembly_groups', 'instance_rotations'],
                     'splits_part_variants_for_non_uniform_scaling' => true,
+                ],
+                'materials' => [
+                    'catalog_kinds' => ['board', 'sheet', 'consumable'],
+                    'project_plan' => ['default_material_id', 'assignments', 'supplies'],
+                    'project_plan_preview' => ['dry_run', 'expected_revision'],
                 ],
                 'fasteners' => [
                     'type' => 'screw',
@@ -63,7 +100,9 @@ class CapabilityController extends Controller
                     'placement' => ['source_instance_id', 'target_instance_id', 'catalog_material_id', 'face', 'center_u', 'center_v', 'sink'],
                     'row_parameters' => ['count', 'row_axis', 'spacing', 'row_target_instance_ids'],
                     'row_limit' => 50,
-                    'copy' => ['fastener_ids', 'source_instance_id', 'target_instance_id', 'face', 'mirror_u', 'mirror_v', 'dry_run', 'expected_revision', 'row_target_instance_ids'],
+                    'placement_preview' => ['dry_run', 'expected_revision', 'suggest_targets'],
+                    'geometry_analysis' => true,
+                    'copy' => ['fastener_ids', 'source_instance_id', 'target_instance_id', 'face', 'mirror_u', 'mirror_v', 'dry_run', 'expected_revision', 'row_target_instance_ids', 'suggest_targets'],
                     'row_target_order' => ['placement' => 'row_index', 'copy' => 'ascending_fastener_id'],
                     'included_in_project_costing' => true,
                     'drilling' => ['clearance', 'pilot', 'countersink', 'dry_run', 'expected_revision'],

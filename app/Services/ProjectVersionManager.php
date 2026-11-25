@@ -61,7 +61,7 @@ class ProjectVersionManager
                     }
                 }
             }
-            $project->forceFill([...$snapshot['project'], 'revision' => $expectedRevision + 1])->save();
+            $project->forceFill(['assembly_instructions' => null, ...$snapshot['project'], 'revision' => $expectedRevision + 1])->save();
 
             return $project->refresh();
         });
@@ -81,7 +81,7 @@ class ProjectVersionManager
     {
         $snapshot = [
             'schema_version' => 1,
-            'project' => $project->only(['name', 'description', 'scene_data', 'script_data', 'material_plan']),
+            'project' => $project->only(['name', 'description', 'scene_data', 'script_data', 'material_plan', 'assembly_instructions']),
             'parts' => $project->partDefinitions()->orderBy('id')->get()->map->getAttributes()->all(),
             'groups' => $project->assemblyGroups()->orderBy('id')->get()->map->getAttributes()->all(),
             'instances' => $project->partInstances()->orderBy('id')->get()->map->getAttributes()->all(),

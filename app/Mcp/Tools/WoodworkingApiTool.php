@@ -2,11 +2,9 @@
 
 namespace App\Mcp\Tools;
 
+use App\Mcp\WoodworkingApiDispatch;
 use Illuminate\Http\Request as HttpRequest;
-use Illuminate\Routing\Route;
-use Illuminate\Routing\Router;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\Facade;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\ResponseFactory;
@@ -35,7 +33,7 @@ class WoodworkingApiTool extends Tool
         return [...parent::toArray(), 'inputSchema' => $schema];
     }
 
-    public function handle(Request $request, HttpRequest $http, Router $router): Response|ResponseFactory
+    public function handle(Request $request, HttpRequest $http, WoodworkingApiDispatch $api): Response|ResponseFactory
     {
         $arguments = $request->all();
         $unknown = array_diff_key($arguments, $this->inputSchema['properties']);
@@ -55,37 +53,32 @@ class WoodworkingApiTool extends Tool
                 ...Arr::except($payload, ['width', 'depth', 'height']),
                 'dimensions' => Arr::only($payload, ['width', 'depth', 'height']),
             ],
-            'woodworking_apply_commands' => ['dry_run' => true, ...$payload],
+            'woodworking_apply_commands', 'woodworking_place_fasteners', 'woodworking_copy_fastener_row', 'woodworking_prepare_fastener_drilling', 'woodworking_update_project_materials', 'woodworking_run_project_script' => ['dry_run' => true, ...$payload],
+            'woodworking_create_catalog_fastener', 'woodworking_update_catalog_fastener' => ['kind' => 'consumable', ...$payload],
+            'woodworking_export_project' => [
+                ...Arr::except($payload, ['inline_preview']),
+                'metadata' => (int) (($payload['format'] ?? null) !== 'png' || ($payload['inline_preview'] ?? true) === false),
+            ],
             default => $payload,
         };
 
-        $subrequest = HttpRequest::create(
-            '/api/v1'.$path,
-            $this->method,
-            $this->method === 'GET' ? $payload : [],
-            server: [
-                'HTTP_ACCEPT' => 'application/json',
-                'HTTP_AUTHORIZATION' => $http->headers->get('Authorization'),
-                'CONTENT_TYPE' => 'application/json',
-                'REMOTE_ADDR' => $http->ip(),
-                'HTTP_HOST' => $http->getHttpHost(),
-                'HTTPS' => $http->isSecure() ? 'on' : 'off',
-            ],
-            content: $this->method === 'GET' ? null : json_encode($payload, JSON_THROW_ON_ERROR),
-        );
-        $subrequest->setUserResolver($http->getUserResolver());
+        $response = $api->handle($http, $this->method, $path, $payload);
 
-        // Give form requests and resources the API context while preserving the MCP route.
-        $application = app();
-        $application->instance('request', $subrequest);
-        Facade::clearResolvedInstance('request');
+        if ($this->name === 'woodworking_export_project' && $response->isSuccessful() && $response->headers->get('Content-Type') === 'image/png') {
+            $link = $response->headers->get('X-Woodworking-Export-Url');
+            $fileName = $response->headers->get('X-Woodworking-Export-File');
+            $resourceUri = $response->headers->get('X-Woodworking-Export-Resource');
 
-        try {
-            $response = (clone $router)->dispatch($subrequest);
-        } finally {
-            $application->instance('request', $http);
-            $application->instance(Route::class, $http->route());
-            Facade::clearResolvedInstance('request');
+            return Response::make([
+                Response::image((string) $response->getContent(), 'image/png'),
+                Response::resourceLink($resourceUri, $fileName, 'image/png', description: 'Download via MCP resources/read.'),
+            ])->withStructuredContent([
+                'download_url' => $link,
+                'resource_uri' => $resourceUri,
+                'filename' => $fileName,
+                'mime_type' => 'image/png',
+                'revision' => (int) $response->headers->get('X-Woodworking-Export-Revision'),
+            ]);
         }
 
         $data = json_decode((string) $response->getContent(), true);
@@ -98,6 +91,10 @@ class WoodworkingApiTool extends Tool
                 'status' => $response->getStatusCode(),
                 'response' => $response->getStatusCode() >= 500 ? ['message' => 'Internal API error.'] : $data,
             ], JSON_THROW_ON_ERROR));
+        }
+        if ($this->name === 'woodworking_export_project') {
+            return Response::make(Response::resourceLink($data['resource_uri'], $data['filename'], $data['mime_type']))
+                ->withStructuredContent($data);
         }
 
         return Response::structured($data);

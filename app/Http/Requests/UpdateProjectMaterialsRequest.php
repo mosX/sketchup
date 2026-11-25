@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\Project;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
 class UpdateProjectMaterialsRequest extends FormRequest
@@ -16,6 +17,8 @@ class UpdateProjectMaterialsRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'dry_run' => ['sometimes', 'boolean'],
+            'expected_revision' => [Rule::requiredIf($this->has('dry_run') && ! $this->boolean('dry_run')), 'integer', 'min:1'],
             'default_material_id' => ['present', 'nullable', 'integer'],
             'assignments' => ['present', 'array', 'list', 'max:10000'],
             'assignments.*' => ['array:part_id,material_id'],

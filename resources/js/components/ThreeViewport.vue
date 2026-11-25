@@ -119,6 +119,9 @@ import {
 } from '../editor/geometry/coordinates.js';
 import { crossCutPlane, operationPreviewObject, ripCutPlane } from '../editor/geometry/cutters.js';
 import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
+import { createPartOutline } from '../editor/geometry/partOutline.js';
+import { createWoodPresentation, exportPresentationPng } from '../editor/woodPresentation.js';
+import { exportPresentationModel } from '../editor/presentationExport.js';
 import { geometryKey } from '../editor/geometry/resultCache.js';
 import { connectionFacePlacement, connectionOperationPlan } from '../editor/connections.js';
 import { createFastenerMesh } from '../editor/fasteners.js';
@@ -142,8 +145,11 @@ const props = defineProps({
     ghostedInstanceIds: { type: Array, default: () => [] },
     explodeDistance: { type: Number, default: 0 },
     focusedInstanceIds: { type: Array, default: () => [] },
+    instructionHighlightIds: { type: Array, default: () => [] },
+    instructionFastenerIds: { type: Array, default: () => [] },
     focusedFasteners: { type: Object, default: null },
     focusRequestId: { type: Number, default: 0 },
+    intersectionBounds: { type: Object, default: null },
     measurementTool: { type: String, default: null },
     measurementResetId: { type: Number, default: 0 },
     sectionAxis: { type: String, default: null },
@@ -156,6 +162,8 @@ const props = defineProps({
     fasteners: { type: Array, default: () => [] },
     fastenerPreview: { type: Array, default: () => [] },
     assemblyGeometryCache: { type: Object, default: null },
+    presentationEnabled: Boolean,
+    presentationSettings: { type: Object, default: () => ({}) },
     fastenerRowCopy: Boolean,
     fastenerMode: Boolean,
     selectedFastenerId: { type: Number, default: null },
@@ -163,6 +171,11 @@ const props = defineProps({
 
 const emit = defineEmits(['select-instance', 'open-instance-group', 'select-operation', 'select-connection', 'connection-preview-rendered', 'fastener-preview-rendered', 'update-operation', 'update-connection-parameters', 'commit-connection-parameters', 'commit-instance-transform', 'commit-group-move', 'blocked-group-move', 'pick-fastener-point', 'select-fastener']);
 const viewport = ref(null);
+const renderStatus = ref('idle');
+const presentationHasModel = ref(false);
+let presentation;
+let loadingPresentation;
+const presentationLifetime = new AbortController();
 const operationControls = ref(null);
 const anglePanelOpen = ref(false);
 const hoveredOperationId = ref(null);
@@ -189,6 +202,7 @@ let controls;
 let renderer;
 let resizeObserver;
 let scene;
+let intersectionMarker;
 let objectsGroup;
 let partGroup;
 let partMesh = null;
@@ -217,6 +231,8 @@ let lastAssemblyPick = null;
 const lockedInstanceIdSet = computed(() => new Set(props.lockedInstanceIds));
 const ghostedInstanceIdSet = computed(() => new Set(props.ghostedInstanceIds));
 const focusedInstanceIdSet = computed(() => new Set(props.focusedInstanceIds));
+const instructionHighlightSet = computed(() => new Set(props.instructionHighlightIds));
+const instructionFastenerSet = computed(() => new Set(props.instructionFastenerIds));
 const angleCapableOperation = computed(() => ['cross_cut', 'rip_cut'].includes(selectedOperation.value?.type));
 const operationToolVisible = computed(() => anglePanelOpen.value || operationToolHovered.value || hoveredOperationId.value === props.selectedOperationId);
 const selectedOperationLabel = computed(() => ({
@@ -406,26 +422,61 @@ const frameInspectionBounds = (bounds, direction, minimumRadius, minimumDistance
     controls.update();
 };
 
+const frameAssemblyInstances = (ids) => {
+    if (!camera || !controls) return;
+    const included = new Set(ids);
+    const bounds = new THREE.Box3();
+    for (const mesh of objectMeshes) {
+        if (mesh.visible && included.has(mesh.userData.instanceId)) bounds.expandByObject(mesh);
+    }
+    if (bounds.isEmpty()) return;
+    const direction = camera.position.clone().sub(controls.target).normalize();
+    frameInspectionBounds(bounds, direction, 0.35, 1.4);
+};
+
+const clearIntersectionMarker = () => {
+    intersectionMarker?.removeFromParent();
+    intersectionMarker?.dispose();
+    intersectionMarker = null;
+};
+
+const updateIntersectionMarker = () => {
+    clearIntersectionMarker();
+    if (!scene || props.mode !== 'assembly' || !props.intersectionBounds) return;
+    const { min, max } = props.intersectionBounds;
+    const toScene = (point) => new THREE.Vector3(point.x, point.z, point.y).multiplyScalar(millimeterScale);
+    const bounds = new THREE.Box3(toScene(min), toScene(max));
+    if (bounds.isEmpty() || !bounds.min.toArray().concat(bounds.max.toArray()).every(Number.isFinite)) return;
+    intersectionMarker = new THREE.Box3Helper(bounds, '#e34845');
+    intersectionMarker.material.depthTest = false;
+    intersectionMarker.material.depthWrite = false;
+    intersectionMarker.renderOrder = 12;
+    scene.add(intersectionMarker);
+};
+
 const focusInstances = () => {
     if (props.mode !== 'assembly' || !camera || !controls || focusedInstanceIdSet.value.size === 0) return;
 
     const direction = camera.position.clone().sub(controls.target).normalize();
+    if (intersectionMarker) {
+        frameInspectionBounds(intersectionMarker.box, direction, 0.18, 0.7);
+        return;
+    }
     const fasteners = (props.focusedFasteners?.ids ?? []).flatMap(id => {
         const object = fastenerMeshes.get(id)?.object;
         return object?.parent?.visible ? [object] : [];
     });
     if (fasteners.length) {
-        const bounds = new THREE.Box3().setFromPoints(fasteners.map(object => object.getWorldPosition(new THREE.Vector3())));
-        const outward = new THREE.Vector3(0, -1, 0).transformDirection(fasteners[0].matrixWorld);
+        const showTip = props.focusedFasteners.status === 'through';
+        const bounds = new THREE.Box3().setFromPoints(fasteners.map(object =>
+            object.localToWorld(new THREE.Vector3(0, showTip ? object.userData.tipDepth : 0, 0))));
+        const outward = new THREE.Vector3(0, showTip ? 1 : -1, 0).transformDirection(fasteners[0].matrixWorld);
         direction.addScaledVector(outward, Math.max(0, 0.55 - direction.dot(outward))).normalize();
         frameInspectionBounds(bounds, direction, 0.18, 0.6);
         return;
     }
 
-    const meshes = objectMeshes.filter(mesh => mesh.visible && focusedInstanceIdSet.value.has(mesh.userData.instanceId));
-    if (!meshes.length) return;
-    const bounds = meshes.reduce((box, mesh) => box.union(new THREE.Box3().setFromObject(mesh)), new THREE.Box3());
-    frameInspectionBounds(bounds, direction, 0.35, 1.4);
+    frameAssemblyInstances(focusedInstanceIdSet.value);
 };
 
 const sectionNormal = () => ({
@@ -609,7 +660,7 @@ const createOffcutPreview = (part, geometry) => {
     const offcut = new THREE.Mesh(geometry, material);
     offcut.renderOrder = 2;
 
-    const outlineGeometry = new THREE.EdgesGeometry(geometry);
+    const outlineGeometry = createPartOutline(geometry);
     const outline = new THREE.LineSegments(
         outlineGeometry,
         new THREE.LineDashedMaterial({ color: '#aa3f28', dashSize: 0.12, gapSize: 0.07, transparent: true, opacity: 0.75 }),
@@ -795,6 +846,95 @@ const removeFastenerMesh = (key, entry) => {
     fastenerMeshes.delete(key);
 };
 
+const syncPresentation = () => {
+    if (!props.presentationEnabled || !presentation) return;
+    const surfaces = objectMeshes.filter(mesh => mesh.visible);
+    const included = new Set(surfaces);
+    const hardware = [...fastenerMeshes.values()]
+        .filter(entry => !entry.preview && included.has(entry.object.parent))
+        .map(entry => entry.object);
+    presentation.setModel(surfaces, hardware);
+    presentationHasModel.value = !presentation.bounds.isEmpty();
+};
+
+const loadPresentation = async () => {
+    if (!props.presentationEnabled || !renderer) return;
+    finishTransform(false);
+    if (presentation) {
+        presentation.configure(props.presentationSettings);
+        syncPresentation();
+        return;
+    }
+    if (loadingPresentation) return loadingPresentation;
+
+    renderStatus.value = 'loading';
+    loadingPresentation = createWoodPresentation(renderer, presentationLifetime.signal).then(stage => {
+        if (presentationLifetime.signal.aborted) {
+            stage.dispose();
+            return;
+        }
+        presentation = stage;
+        presentation.configure(props.presentationSettings);
+        syncPresentation();
+        renderStatus.value = 'ready';
+    }).catch(() => {
+        if (!presentationLifetime.signal.aborted) renderStatus.value = 'error';
+    }).finally(() => {
+        loadingPresentation = null;
+    });
+    return loadingPresentation;
+};
+
+const framePresentation = () => {
+    if (!presentation || presentation.bounds.isEmpty()) return;
+    const sphere = presentation.bounds.getBoundingSphere(new THREE.Sphere());
+    const direction = camera.position.clone().sub(controls.target).normalize();
+    const verticalAngle = THREE.MathUtils.degToRad(camera.fov / 2);
+    const angle = Math.min(verticalAngle, Math.atan(Math.tan(verticalAngle) * camera.aspect));
+    const distance = Math.max(sphere.radius, 0.05) * 1.1 / Math.sin(angle);
+    controls.target.copy(sphere.center);
+    camera.position.copy(sphere.center).addScaledVector(direction, distance);
+    camera.near = Math.max(0.01, distance / 1000);
+    camera.far = Math.max(1000, distance * 12);
+    camera.updateProjectionMatrix();
+    controls.update();
+};
+
+const capturePresentation = (format = 'png') => {
+    if (!props.presentationEnabled || !presentation || presentation.bounds.isEmpty()) {
+        return Promise.reject(new Error('No model to render.'));
+    }
+    presentation.configure(props.presentationSettings);
+    if (format !== 'png') return exportPresentationModel(presentation.model, format, presentation.woodMaps);
+
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = presentation.exposure;
+    return exportPresentationPng(renderer, presentation.scene, camera);
+};
+
+const readAssemblyCamera = () => {
+    if (!camera || !controls) return null;
+    const toEditor = vector => ({ x: vector.x / millimeterScale, y: vector.z / millimeterScale, z: vector.y / millimeterScale });
+    return { position: toEditor(camera.position), target: toEditor(controls.target) };
+};
+
+const restoreAssemblyCamera = (view) => {
+    if (!view || !camera || !controls) return;
+    const set = (vector, point) => vector.set(point.x, point.z, point.y).multiplyScalar(millimeterScale);
+    set(camera.position, view.position);
+    set(controls.target, view.target);
+    const distance = camera.position.distanceTo(controls.target);
+    camera.near = Math.max(0.001, distance / 1000);
+    camera.far = Math.max(1000, distance * 12);
+    camera.updateProjectionMatrix();
+    controls.update();
+};
+
+defineExpose({
+    renderStatus, presentationHasModel, framePresentation, capturePresentation,
+    readAssemblyCamera, restoreAssemblyCamera, frameAssemblyInstances,
+});
+
 const syncFastenerMeshes = () => {
     const sources = new Map(objectMeshes.map(mesh => [mesh.userData.instanceId, mesh]));
     const displayed = new Set();
@@ -811,7 +951,7 @@ const syncFastenerMeshes = () => {
             if (!source) continue;
             displayed.add(key);
             const part = source.userData.part;
-            const selected = props.selectedFastenerId === item.id;
+            const selected = props.selectedFastenerId === item.id || (!preview && instructionFastenerSet.value.has(item.id));
             const status = !preview && focusedIds.has(item.id) ? props.focusedFasteners.status : null;
             const signature = JSON.stringify([item, part.dimensions, selected, status]);
             const entry = fastenerMeshes.get(key);
@@ -823,6 +963,7 @@ const syncFastenerMeshes = () => {
         }
     }
     fastenerMeshes.forEach((entry, key) => { if (!displayed.has(key)) removeFastenerMesh(key, entry); });
+    syncPresentation();
 };
 
 const clearObjects = () => {
@@ -842,7 +983,7 @@ const clearPartObjects = (keepMesh = false) => {
 };
 
 const updateMeshAppearance = (mesh, isSelected) => applyMeshAppearance(mesh, {
-    selected: props.mode === 'assembly' && (isSelected || selectedGroupInstanceIdSet.value.has(mesh.userData.instanceId)),
+    selected: props.mode === 'assembly' && (isSelected || selectedGroupInstanceIdSet.value.has(mesh.userData.instanceId) || instructionHighlightSet.value.has(mesh.userData.instanceId)),
     ghosted: props.mode === 'part' ? mesh.userData.instanceId !== null : ghostedInstanceIdSet.value.has(mesh.userData.instanceId),
     dimmed: props.mode === 'assembly' && focusedInstanceIdSet.value.size > 0
         && mesh.userData.instanceId !== null
@@ -866,7 +1007,7 @@ const createMesh = (part, geometry, instance = null, edgeGeometry = null) => {
     mesh.userData.geometrySize = partSize(part);
 
     const edges = new THREE.LineSegments(
-        edgeGeometry ?? new THREE.EdgesGeometry(geometry),
+        edgeGeometry ?? createPartOutline(geometry),
         new THREE.LineBasicMaterial({ color: isSelected ? '#173d30' : '#6f5235' }),
     );
     mesh.userData.edges = edges;
@@ -967,7 +1108,7 @@ const rebuildAssembly = async () => {
     results.forEach(({ part, geometry }) => {
         if (!geometry) return;
 
-        const edges = new THREE.EdgesGeometry(geometry);
+        const edges = createPartOutline(geometry);
         part.instances.forEach((instance) => createMesh(part, geometry, instance, edges));
     });
     syncAssemblyMeshes();
@@ -1512,6 +1653,10 @@ const roundoverEdgeFromIntersection = (part, intersection) => {
 };
 
 const pointerDown = (event) => {
+    if (props.presentationEnabled) {
+        controls.mouseButtons.LEFT = event.altKey ? THREE.MOUSE.ROTATE : null;
+        return;
+    }
     lastAssemblyPick = null;
     lastPointerPosition.set(event.clientX, event.clientY);
     hasPointerPosition = true;
@@ -1783,6 +1928,7 @@ const pointerDown = (event) => {
 };
 
 const openPickedGroup = (event) => {
+    if (props.presentationEnabled) return;
     if (props.mode !== 'assembly' || event.altKey || props.measurementTool || lastAssemblyPick === null) return;
     emit('open-instance-group', lastAssemblyPick);
     lastAssemblyPick = null;
@@ -1828,6 +1974,7 @@ const scalePointerMove = (event) => {
 };
 
 const pointerMove = (event) => {
+    if (props.presentationEnabled) return;
     lastPointerPosition.set(event.clientX, event.clientY);
     hasPointerPosition = true;
 
@@ -2210,6 +2357,7 @@ const keyUp = (event) => {
 };
 
 const keyDown = (event) => {
+    if (props.presentationEnabled) return;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target?.tagName) || event.target?.isContentEditable) return;
     if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
 
@@ -2246,6 +2394,7 @@ const keyDown = (event) => {
 onMounted(() => {
     const container = viewport.value;
     scene = new THREE.Scene();
+    updateIntersectionMarker();
     scene.background = new THREE.Color('#eef1ed');
     objectsGroup = new THREE.Group();
     partGroup = new THREE.Group();
@@ -2292,8 +2441,11 @@ onMounted(() => {
 
     const render = () => {
         controls.update();
-        renderer.render(scene, camera);
-        positionOperationControls();
+        const stage = props.presentationEnabled && presentation;
+        renderer.toneMapping = stage ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+        renderer.toneMappingExposure = stage ? stage.exposure : 1;
+        renderer.render(stage ? stage.scene : scene, camera);
+        if (!props.presentationEnabled) positionOperationControls();
         animationFrame = requestAnimationFrame(render);
     };
 
@@ -2310,8 +2462,14 @@ onMounted(() => {
     syncPartView();
     rebuildAssembly();
     rebuildPart();
+    void loadPresentation();
     render();
 });
+
+watch(() => props.presentationEnabled, () => void loadPresentation());
+watch(() => props.presentationSettings, settings => {
+    if (props.presentationEnabled && presentation) presentation.configure(settings);
+}, { deep: true });
 
 watch(() => props.mode === 'part' && props.activePart
     ? JSON.stringify([props.activePart.id, geometryKey(props.activePart, props.selectedOperationId)])
@@ -2336,7 +2494,7 @@ watch(() => props.selectedInstanceId, (selectedInstanceId, previousInstanceId) =
     clearTransformGuide();
     objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === selectedInstanceId));
 });
-watch(() => [props.ghostedInstanceIds, props.selectedGroupInstanceIds], () => {
+watch(() => [props.ghostedInstanceIds, props.selectedGroupInstanceIds, props.instructionHighlightIds], () => {
     objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === props.selectedInstanceId));
 }, { deep: true });
 watch(() => props.groupMoveInstanceIds.join(','), () => {
@@ -2346,10 +2504,11 @@ watch(() => props.explodeDistance, applyExplodedPositions);
 watch(() => props.connections, updateConnectionHelpers, { deep: true });
 watch(() => props.selectedConnectionId, updateConnectionHelpers);
 watch(() => [props.connectionMachiningPreview, props.fastenerMachiningPreview], updateConnectionHelpers);
-watch(() => [props.mode, props.fasteners, props.fastenerPreview, props.selectedFastenerId, props.fastenerMachiningPreview, props.focusedFasteners], syncFastenerMeshes, { deep: true });
+watch(() => [props.mode, props.fasteners, props.fastenerPreview, props.selectedFastenerId, props.fastenerMachiningPreview, props.focusedFasteners, props.instructionFastenerIds], syncFastenerMeshes, { deep: true });
 watch(() => props.focusedInstanceIds, () => {
     objectMeshes.forEach((mesh) => updateMeshAppearance(mesh, mesh.userData.instanceId === props.selectedInstanceId));
 }, { deep: true });
+watch(() => [props.intersectionBounds, props.mode], updateIntersectionMarker);
 watch(() => props.focusRequestId, () => window.requestAnimationFrame(focusInstances));
 watch(() => props.measurementTool, clearMeasurement);
 watch(() => props.measurementResetId, clearMeasurement);
@@ -2362,6 +2521,8 @@ watch(() => props.selectedOperationId, () => {
 });
 
 onBeforeUnmount(() => {
+    presentationLifetime.abort();
+    presentation?.dispose();
     cancelAnimationFrame(animationFrame);
     window.clearTimeout(rebuildTimer);
     rebuildVersion++;
@@ -2384,6 +2545,7 @@ onBeforeUnmount(() => {
     cancelOperationToolHide();
     clearMeasurement();
     clearConnectionHelpers();
+    clearIntersectionMarker();
     if (sectionHelper) {
         scene?.remove(sectionHelper);
         sectionHelper.geometry.dispose();

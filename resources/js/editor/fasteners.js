@@ -62,6 +62,7 @@ export const createFastenerMesh = (part, fastener, preview = false, selected = f
     const group = new Group();
     group.position.copy(anchor.position);
     group.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), anchor.direction);
+    group.userData.tipDepth = length;
 
     const head = new Mesh(new CylinderGeometry(headShape.baseRadius * millimeterScale, headShape.rimRadius * millimeterScale, headHeight, 14), material);
     const shaft = new Mesh(new CylinderGeometry(radius, radius, length - tipLength, 10), material);
@@ -80,7 +81,7 @@ export const createFastenerMesh = (part, fastener, preview = false, selected = f
             new MeshBasicMaterial({ color: warning, depthTest: false, depthWrite: false, side: DoubleSide }),
         );
         ring.rotation.x = Math.PI / 2;
-        ring.position.y = -headHeight - 0.002;
+        ring.position.y = diagnosticStatus === 'through' ? length + 0.002 : -headHeight - 0.002;
         ring.renderOrder = 10;
         ring.userData.fastenerId = fastener.id;
         group.add(ring);
@@ -145,7 +146,7 @@ const probeRing = (probe, origin, direction, stock, radius) => {
         .map(interval => ({ entry: Math.max(interval.entry, 0), exit: interval.exit })));
 };
 
-export const inspectFastenerReach = (fastener, source, targets, materialFor = null) => {
+export const inspectFastenerReach = (fastener, source, targets, materialFor = null, { checkExposedTip = false } = {}) => {
     const anchor = fastenerAnchor(source.part, fastener);
     const sink = Number(fastener.sink) * millimeterScale;
     const direction = anchor.direction.transformDirection(source.world);
@@ -198,11 +199,28 @@ export const inspectFastenerReach = (fastener, source, targets, materialFor = nu
         }
     }
 
-    if (!nearest) return { status: 'misses', targetId: null, depth: 0, protrusion: 0, shortage: 0, pending, approximate };
+    if (!nearest) {
+        const exposed = checkExposedTip && remaining > tolerance;
+        return { status: exposed ? 'through' : 'misses', targetId: null, depth: 0, protrusion: exposed ? remaining / millimeterScale : 0, shortage: 0, pending, approximate };
+    }
     const depth = nearest.intervals.reduce((sum, interval) => sum + Math.max(0, Math.min(remaining, interval.exit) - interval.entry), 0);
+    if (checkExposedTip && depth <= tolerance && remaining > tolerance) {
+        return { status: 'through', targetId: null, depth: 0, protrusion: remaining / millimeterScale, shortage: 0, pending, approximate };
+    }
     const protrusion = Math.max(0, remaining - nearest.exit);
+    let covered = false;
+    if (checkExposedTip && protrusion > tolerance) {
+        covered = candidates.some(({ target, bounds }) => {
+            if (remaining <= bounds.entry + tolerance || remaining > bounds.exit + tolerance) return false;
+            const probe = material(target.part);
+            const exact = probe ? probe(
+                origin.clone().applyMatrix4(target.inverse), direction.clone().transformDirection(target.inverse),
+            ) : [stockInterval(origin, direction, target)].filter(Boolean);
+            return exact.some(({ entry, exit }) => remaining > entry + tolerance && remaining <= exit + tolerance);
+        });
+    }
     return {
-        status: depth <= tolerance ? 'short' : protrusion > tolerance ? 'through' : 'reaches',
+        status: depth <= tolerance ? 'short' : protrusion > tolerance && !covered ? 'through' : 'reaches',
         targetId: nearest.targetId,
         depth: depth / millimeterScale,
         protrusion: protrusion / millimeterScale,

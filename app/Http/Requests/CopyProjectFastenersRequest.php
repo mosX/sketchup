@@ -31,6 +31,7 @@ class CopyProjectFastenersRequest extends FormRequest
             'mirror_v' => ['sometimes', 'boolean'],
             'dry_run' => ['required', 'boolean'],
             'expected_revision' => [Rule::requiredIf(! $this->boolean('dry_run')), 'integer', 'min:1'],
+            'suggest_targets' => [$this->boolean('dry_run') ? 'sometimes' : 'prohibited', 'boolean'],
         ];
     }
 }

@@ -1,4 +1,4 @@
-import { createScriptApi } from './scriptApi.js';
+import { compileProjectScript, createScriptApi } from './scriptApi.js';
 import { createScriptTransforms } from './scriptTransforms.js';
 
 // Only the trusted relay runs in the iframe. User code runs in its disposable
@@ -43,14 +43,11 @@ export function runScript(source, { signal, values = {} } = {}) {
         const nonce = crypto.randomUUID().replaceAll('-', '');
         const workerSource = `const createScriptTransforms = ${createScriptTransforms.toString()};
             const createScriptApi = ${createScriptApi.toString()};
+            const compileProjectScript = ${compileProjectScript.toString()};
             onmessage = ({ data: { source, values } }) => {
                 const send = postMessage.bind(self);
                 try {
-                    const api = createScriptApi(values);
-                    const names = ['part', 'group', 'add', 'log', 'connect', 'repeat', 'mirror', 'parameter'];
-                    new Function(...names, '"use strict";\\n' + source)(...names.map(name => api[name]));
-                    const result = JSON.stringify(api.result());
-                    if (result.length > 250000) throw new Error('Script output exceeds 250 KB.');
+                    const result = JSON.stringify(compileProjectScript(source, values));
                     send({ result });
                 } catch (error) { send({ error: String(error.message).slice(0, 2000) }); }
             };`;

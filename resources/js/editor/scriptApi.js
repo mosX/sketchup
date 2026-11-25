@@ -5,6 +5,12 @@ export function createScriptApi(parameterValues = {}) {
     const math = createScriptTransforms();
     const commands = [];
     const connections = [];
+    const fasteners = [];
+    const assemblySteps = [];
+    const stockAssignments = new Map();
+    const supplies = new Map();
+    let defaultMaterialId;
+    let renderSettings;
     const parameters = [];
     const logs = [];
     const handles = new Map();
@@ -89,6 +95,7 @@ export function createScriptApi(parameterValues = {}) {
             return { u: sizes[0], v: sizes[1], depth: sizes[2], face };
         };
         const handle = Object.freeze({
+            stock(materialId) { stockAssignments.set(command.temporary_id, catalogId(materialId)); return handle; },
             drill(parameters = {}) { const s = surface(parameters); return handle.operation('drill', { face: s.face, center_u: s.u / 2, center_v: s.v / 2, diameter: Math.min(8, s.u, s.v), depth: parameters.through ? s.depth : Math.min(18, s.depth), through: false, ...parameters }); },
             groove(parameters = {}) { const s = surface(parameters); return handle.operation('groove', { face: s.face, center_u: s.u / 2, center_v: s.v / 2, path_angle: 0, groove_length: s.u, width: Math.min(8, s.v), depth: Math.min(6, s.depth), blade_diameter: 190, ...parameters }); },
             roundover(parameters = {}) { return handle.operation('edge_roundover', { edge: 'top_left', radius: Math.min(4, command.data.width / 2, command.data.thickness / 2), ...parameters }); },
@@ -106,8 +113,8 @@ export function createScriptApi(parameterValues = {}) {
         handles.set(handle, { kind: 'part', id: command.temporary_id, command });
         return handle;
     };
-    const group = (name, parent = null) => {
-        const command = append('create_group', { name }, parent ? { parent_group_ref: reference(parent, 'group') } : {});
+    const group = (name, parent = null, options = {}) => {
+        const command = append('create_group', { ...options, name }, parent ? { parent_group_ref: reference(parent, 'group') } : {});
         const entry = { kind: 'group', id: command.temporary_id, command, parent: parent ? entryFor(parent, 'group') : null, position: [0, 0, 0], matrix: math.identity() };
         const handle = Object.freeze({ add: (definition, options = {}) => add(definition, { ...options, group: handle }), ...movable(entry) });
         entry.handle = handle;
@@ -115,14 +122,14 @@ export function createScriptApi(parameterValues = {}) {
         return handle;
     };
     const clone = (original, parent = original.parent, references = new Map()) => {
-        if (original.kind === 'part') throw new Error('Copy an instance or group, or repeat a part.');
+        if (!['instance', 'group'].includes(original.kind)) throw new Error('Copy an instance or group, or repeat a part.');
         let copy;
         if (original.kind === 'instance') {
             const definition = [...handles.keys()].find(handle => handles.get(handle).command === original.definition);
             copy = add(definition, parent ? { group: parent.handle } : {});
         } else {
             const children = [...handles.values()].filter(entry => entry.parent === original);
-            copy = group(`${original.command.data.name} copy`, parent?.handle);
+            copy = group(`${original.command.data.name} copy`, parent?.handle, original.command.data);
             children.forEach(child => clone(child, entryFor(copy), references));
         }
         const entry = entryFor(copy);
@@ -131,13 +138,26 @@ export function createScriptApi(parameterValues = {}) {
         references.set(original.id, entry.id);
         return copy;
     };
-    const cloneWithConnections = (original) => {
+    const cloneAssembly = (original) => {
         const references = new Map();
         const copy = clone(original, original.parent, references);
         for (const connection of [...connections]) {
             if (!references.has(connection.primary_ref) || !references.has(connection.secondary_ref)) continue;
             if (connections.length >= 30) throw new Error('Limit: 30 connections per script.');
             connections.push({ ...connection, parameters: { ...connection.parameters }, primary_ref: references.get(connection.primary_ref), secondary_ref: references.get(connection.secondary_ref) });
+        }
+        for (const row of [...fasteners]) {
+            const endpoints = [row.source_ref, row.target_ref, ...(row.row_target_refs ?? [])].filter(Boolean);
+            if (!endpoints.every(ref => references.has(ref))) continue;
+            const mapped = {
+                ...row,
+                ref: nextFastenerRef(),
+                source_ref: references.get(row.source_ref),
+                placement: { ...row.placement },
+            };
+            if (row.target_ref) mapped.target_ref = references.get(row.target_ref);
+            if (row.row_target_refs) mapped.row_target_refs = row.row_target_refs.map(ref => ref === null ? null : references.get(ref));
+            fasteners.push(mapped);
         }
         return copy;
     };
@@ -147,7 +167,7 @@ export function createScriptApi(parameterValues = {}) {
         const original = entryFor(target);
         return Array.from({ length: count }, (_, index) => {
             if (original.kind === 'part') return add(target, { position: math.add(math.vector(position), math.scale(step, index)), rotation, ...(parent ? { group: parent } : {}) });
-            const copy = cloneWithConnections(original);
+            const copy = cloneAssembly(original);
             copy.move(math.scale(step, index + 1));
             return copy;
         });
@@ -157,7 +177,7 @@ export function createScriptApi(parameterValues = {}) {
         const pose = world(original);
         const matrix = math.reflection(axis);
         const pivot = math.vector(origin);
-        const copy = cloneWithConnections(original);
+        const copy = cloneAssembly(original);
         setWorld(entryFor(copy), { matrix: math.multiply(matrix, pose.matrix), position: math.add(pivot, math.apply(matrix, math.add(pose.position, math.scale(pivot, -1)))) });
         return copy;
     };
@@ -169,14 +189,71 @@ export function createScriptApi(parameterValues = {}) {
         parameters.push({ name, label: String(label).slice(0, 100), default: defaultValue, min, max, step, value });
         return value;
     };
-    const connect = (primary, secondary, { type = 'butt', label = '', ...parameters } = {}) => {
+    const connect = (primary, secondary, { type = 'butt', label = '', note = null, is_verified = false, ...parameters } = {}) => {
         const first = reference(primary, 'instance'), second = reference(secondary, 'instance');
         if (first === second) throw new Error('A connection requires two different instances.');
         if (connections.length >= 30) throw new Error('Limit: 30 connections per script.');
-        const connection = { primary_ref: first, secondary_ref: second, type, label, parameters, generate_machining: false };
+        const connection = { primary_ref: first, secondary_ref: second, type, label, ...(note === null ? {} : { note }), ...(is_verified ? { is_verified } : {}), parameters, generate_machining: false };
         connections.push(connection);
         return Object.freeze({ generateMachining() { connection.generate_machining = true; return this; } });
     };
+    const catalogId = (id) => {
+        if (!Number.isSafeInteger(id) || id < 1) throw new Error('Expected a positive catalog material ID.');
+        return id;
+    };
+    const defaultStock = (id) => { defaultMaterialId = id === null ? null : catalogId(id); };
+    const supply = (id, quantity) => {
+        catalogId(id);
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Supply quantity must be positive.');
+        supplies.set(id, Math.round(((supplies.get(id) ?? 0) + quantity) * 1000) / 1000);
+    };
+    const nextFastenerRef = () => {
+        if (fasteners.length >= 100) throw new Error('Limit: 100 fastener placements or rows per script.');
+        return `fastener_${fasteners.length + 1}`;
+    };
+    const fastener = (source, { target = null, rowTargets, face = 'top', sink = 0, ...placement } = {}) => {
+        const ref = nextFastenerRef();
+        const data = {
+            ref, source_ref: reference(source, 'instance'),
+            placement: { face, sink, ...placement },
+            ...(target ? { target_ref: reference(target, 'instance') } : {}),
+            ...(rowTargets ? { row_target_refs: rowTargets.map(item => item === null ? null : reference(item, 'instance')) } : {}),
+        };
+        fasteners.push(data);
+        const handle = Object.freeze({
+            id: ref,
+            prepareDrilling(settings) { data.drilling = { ...settings }; return handle; },
+        });
+        handles.set(handle, { id: ref, kind: 'fastener' });
+        return handle;
+    };
+    const instanceRefs = (items) => [...new Set(items.flatMap((item) => {
+        const entry = entryFor(item);
+        if (entry.kind === 'instance') return [entry.id];
+        if (entry.kind !== 'group') throw new Error('Use instance or group handles in assembly steps.');
+        return [...handles.values()].filter(child => {
+            if (child.kind !== 'instance') return false;
+            for (let parent = child.parent; parent; parent = parent.parent) {
+                if (parent === entry) return true;
+            }
+            return false;
+        }).map(child => child.id);
+    }))];
+    const assemblyStep = (title, { parts = [], highlight = null, fasteners: hardware = null, instruction, notes, camera } = {}) => {
+        if (assemblySteps.length >= 200) throw new Error('Limit: 200 assembly steps.');
+        const point = (value) => {
+            const [x, y, z] = math.vector(value);
+            return { x, y, z };
+        };
+        assemblySteps.push({
+            title, instruction, notes,
+            instance_refs: instanceRefs(parts),
+            highlight_refs: highlight === null ? null : instanceRefs(highlight),
+            fastener_refs: hardware === null ? null : hardware.map(item => reference(item, 'fastener')),
+            camera: camera ? { position: point(camera.position), target: point(camera.target) } : null,
+        });
+    };
+    const render = (options) => { renderSettings = { ...renderSettings, ...options }; };
     const log = (...values) => {
         if (logs.length < 50) logs.push(values.map(String).join(' ').slice(0, 500));
     };
@@ -186,10 +263,53 @@ export function createScriptApi(parameterValues = {}) {
             const pose = world(entry);
             entry.command.data = transform({ position: pose.position.map(v => Math.round(v * 1e6) / 1e6), ...math.decompose(pose.matrix) });
         }
-        return { commands, connections, parameters, logs };
+        const materials = {
+            ...(defaultMaterialId === undefined ? {} : { default_material_id: defaultMaterialId }),
+            ...(stockAssignments.size ? { assignments: [...stockAssignments].map(([part_ref, material_id]) => ({ part_ref, material_id })) } : {}),
+            ...(supplies.size ? { supplies: [...supplies].map(([material_id, quantity]) => ({ material_id, quantity })) } : {}),
+        };
+        return {
+            commands, connections, parameters, logs,
+            ...(fasteners.length ? { fasteners } : {}),
+            ...(assemblySteps.length ? { assembly_steps: assemblySteps } : {}),
+            ...(Object.keys(materials).length ? { materials } : {}),
+            ...(renderSettings ? { render_settings: renderSettings } : {}),
+        };
     };
-    return { part, group, add, log, repeat, mirror, parameter, connect, result };
+    return { part, group, add, log, repeat, mirror, parameter, connect, fastener, defaultStock, supply, assemblyStep, render, result };
 }
+
+export function compileProjectScript(source, values = {}) {
+    if (typeof source !== 'string' || source.length > 50000) throw new Error('Script exceeds 50,000 characters.');
+    const { result, ...bindings } = createScriptApi(values);
+    new Function(...Object.keys(bindings), '"use strict";\n' + source)(...Object.values(bindings));
+    const compiled = result();
+    if (JSON.stringify(compiled).length > 250000) throw new Error('Script output exceeds 250 KB.');
+    return compiled;
+}
+
+export function compileProjectScriptPayload(source, values = {}) {
+    const { parameters, logs, ...payload } = compileProjectScript(source, values);
+    return {
+        ...payload,
+        source,
+        parameter_values: Object.fromEntries(parameters.map(item => [item.name, item.value])),
+    };
+}
+
+export const assemblyScript = `const wood = group("Box");
+const base = wood.add(part("Base", { length: 300, width: 180, thickness: 18 }), { position: [0, 0, 9] });
+const lid = wood.add(part("Lid", { length: 300, width: 180, thickness: 18 }), { position: [0, 0, 27] });
+// Use your catalog IDs to assign stock and hardware:
+// const screws = fastener(lid, { target: base, catalog_material_id: 12, center_u: 40, center_v: 30, count: 3, row_axis: "u", spacing: 60 });
+// screws.prepareDrilling({ clearance_diameter: 4, pilot: true, pilot_diameter: 2, pilot_depth: 10 });
+assemblyStep("Prepare the base", { parts: [base], notes: "Place both stock faces flat before joining." });
+assemblyStep("Fit the lid", {
+    parts: [lid], highlight: [base, lid], instruction: "Align the long edges.",
+    camera: { position: [480, -550, 400], target: [0, 0, 20] }
+    // Add fasteners: [screws] after selecting a catalog ID.
+});
+render({ wood: "pine", finish: "oil", light: "studio", exposure: -0.5 });`;
 
 export const starterScript = `// Millimeters, degrees. X/Y = floor, Z = height.
 // Part: length along X, width along Y, thickness along Z.

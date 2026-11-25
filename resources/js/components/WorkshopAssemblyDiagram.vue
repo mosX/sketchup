@@ -17,12 +17,14 @@ const props = defineProps({
     parts: { type: Array, required: true },
     groups: { type: Array, required: true },
     label: { type: String, required: true },
+    highlightIds: { type: Array, default: null },
+    camera: { type: Object, default: null },
 });
 const layout = computed(() => {
     const faces = projectPreviewFaces({
         parts: props.parts,
         assembly_groups: props.groups.map(group => ({ ...group, is_visible: true })),
-    });
+    }, props.camera);
     if (!faces.length) return null;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -48,6 +50,13 @@ const layout = computed(() => {
         marks.push({ code, x, y, width });
         labeled.add(partId);
     }
-    return { faces: faces.map(face => ({ color: face.color, points: face.points.map(project).map(point => point.join(',')).join(' ') })), marks };
+    const highlights = new Set(props.highlightIds ?? []);
+    return {
+        faces: faces.map(face => ({
+            color: highlights.has(face.instanceId) ? '#8ac29d' : face.color,
+            points: face.points.map(project).map(point => point.join(',')).join(' '),
+        })),
+        marks,
+    };
 });
 </script>

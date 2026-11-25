@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 const transferableAttributes = ['position', 'normal'];
 
-export const serializeGeometry = (geometry) => {
+export const serializeGeometry = (geometry, outlinePositions = null) => {
     if (!geometry) return null;
 
     const attributes = {};
@@ -29,9 +29,10 @@ export const serializeGeometry = (geometry) => {
     } : null;
 
     if (serializedIndex) transfers.push(serializedIndex.array.buffer);
+    if (outlinePositions) transfers.push(outlinePositions.buffer);
 
     return {
-        payload: { attributes, index: serializedIndex },
+        payload: { attributes, index: serializedIndex, drawRange: { ...geometry.drawRange }, outlinePositions },
         transfers,
     };
 };
@@ -53,6 +54,8 @@ export const deserializeGeometry = (serialized) => {
         ));
     }
 
+    if (serialized.drawRange) geometry.setDrawRange(serialized.drawRange.start, serialized.drawRange.count);
+    if (serialized.outlinePositions) geometry.userData.outlinePositions = serialized.outlinePositions;
     geometry.computeBoundingSphere();
 
     return geometry;

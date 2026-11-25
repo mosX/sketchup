@@ -2,35 +2,42 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Actions\Projects\AnalyzeProjectGeometry;
 use App\Actions\Projects\CopyProjectFasteners;
+use App\Actions\Projects\PlanFastenerPlacements;
 use App\Actions\Projects\PrepareFastenerDrilling;
+use App\Exceptions\ProjectRevisionConflictException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CopyProjectFastenersRequest;
 use App\Http\Requests\PrepareFastenerDrillingRequest;
 use App\Http\Requests\ProjectFastenerRequest;
 use App\Http\Resources\ProjectFastenerResource;
-use App\Models\CatalogMaterial;
 use App\Models\Project;
 use App\Models\ProjectFastener;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Validation\ValidationException;
 
 class ProjectFastenerController extends Controller
 {
+    public function __construct(private PlanFastenerPlacements $placementPlanner) {}
+
     public function drill(PrepareFastenerDrillingRequest $request, Project $project, PrepareFastenerDrilling $drilling): JsonResponse
     {
         return response()->json(['data' => $drilling->handle($project, $request->validated())]);
     }
 
-    public function copy(CopyProjectFastenersRequest $request, Project $project, CopyProjectFasteners $copying): JsonResponse
+    public function copy(CopyProjectFastenersRequest $request, Project $project, CopyProjectFasteners $copying, AnalyzeProjectGeometry $analysis): JsonResponse
     {
-        $result = $copying->handle($project, $request->validated());
+        $result = $copying->handle($project, $request->safe()->except(['suggest_targets']));
         $result['placements'] = ProjectFastenerResource::collection($result['placements'])->resolve($request);
+        if ($request->boolean('suggest_targets')) {
+            $result['target_suggestions'] = $analysis->handle($project, $request, $result['placements']);
+        }
 
         return response()->json(['data' => $result], $request->boolean('dry_run') ? 200 : 201);
     }
@@ -42,16 +49,30 @@ class ProjectFastenerController extends Controller
         return ProjectFastenerResource::collection($project->projectFasteners()->orderBy('id')->get());
     }
 
-    public function store(ProjectFastenerRequest $request, Project $project): JsonResponse
+    public function analyze(Request $request, Project $project, AnalyzeProjectGeometry $analysis): JsonResponse
     {
-        $fasteners = $this->save($project, $request->validated());
+        Gate::authorize('view', $project);
 
-        return ProjectFastenerResource::collection($fasteners)->response()->setStatusCode(201);
+        return response()->json(['data' => $analysis->handle($project, $request)]);
+    }
+
+    public function store(ProjectFastenerRequest $request, Project $project, AnalyzeProjectGeometry $analysis): JsonResponse
+    {
+        $result = $this->save($project, $request->validated());
+        $placements = ProjectFastenerResource::collection($result['placements']);
+        if ($request->boolean('dry_run')) {
+            $data = $placements->resolve($request);
+            $suggestions = $request->boolean('suggest_targets') ? $analysis->handle($project, $request, $data) : null;
+
+            return response()->json(['data' => $data, 'revision' => $result['revision'], 'target_suggestions' => $suggestions]);
+        }
+
+        return $placements->additional(['revision' => $result['revision']])->response()->setStatusCode(201);
     }
 
     public function update(ProjectFastenerRequest $request, Project $project, ProjectFastener $projectFastener): ProjectFastenerResource
     {
-        return new ProjectFastenerResource($this->save($project, $request->validated(), $projectFastener)[0]);
+        return new ProjectFastenerResource($this->save($project, $request->validated(), $projectFastener)['placements'][0]);
     }
 
     public function destroy(ProjectFastenerRequest $request, Project $project): Response
@@ -72,8 +93,15 @@ class ProjectFastenerController extends Controller
     {
         return DB::transaction(function () use ($project, $attributes, $existing): array {
             $project = Project::query()->lockForUpdate()->findOrFail($project->id);
+            $expected = $attributes['expected_revision'] ?? null;
+            if ($expected !== null && (int) $expected !== $project->revision) {
+                throw new ProjectRevisionConflictException((int) $expected, $project->revision);
+            }
             $existing = $existing ? $project->projectFasteners()->findOrFail($existing->id) : null;
-            $placements = $this->placements($project, $attributes, $existing);
+            $placements = $this->placementPlanner->handle($project, Arr::except($attributes, ['expected_revision', 'dry_run', 'suggest_targets']), $existing);
+            if ($attributes['dry_run'] ?? false) {
+                return ['revision' => $project->revision, 'placements' => array_map(fn (array $placement): ProjectFastener => new ProjectFastener($placement), $placements)];
+            }
             $saved = [];
             foreach ($placements as $placement) {
                 if ($existing) {
@@ -85,68 +113,7 @@ class ProjectFastenerController extends Controller
             }
             $project->increment('revision');
 
-            return $saved;
+            return ['revision' => $project->revision, 'placements' => $saved];
         }, attempts: 3);
-    }
-
-    private function placements(Project $project, array $attributes, ?ProjectFastener $existing): array
-    {
-        $source = $project->partInstances()->with('partDefinition')->find($attributes['source_instance_id']);
-        if (! $source) {
-            throw ValidationException::withMessages(['source_instance_id' => 'Выберите исходную деталь этого проекта.']);
-        }
-        $targetId = $attributes['target_instance_id'] ?? null;
-        $count = (int) ($attributes['count'] ?? 1);
-        $rowTargets = $attributes['row_target_instance_ids'] ?? array_fill(0, $count, $targetId);
-        if (count($rowTargets) !== $count) {
-            throw ValidationException::withMessages(['row_target_instance_ids' => 'Укажите вторую деталь или пустое значение для каждой точки ряда.']);
-        }
-        $targetIds = collect($rowTargets)->filter()->map(fn (int|string $id): int => (int) $id)->unique();
-        if ($targetIds->contains($source->id) || ($targetIds->isNotEmpty() && $project->partInstances()->whereKey($targetIds->all())->count() !== $targetIds->count())) {
-            throw ValidationException::withMessages(['target_instance_id' => 'Выберите вторую деталь этого проекта.']);
-        }
-
-        $material = CatalogMaterial::query()->where('user_id', $project->user_id)->where('kind', 'consumable')->find($attributes['catalog_material_id']);
-        $sameMaterial = $existing !== null && $existing->catalog_material_id === $material?->id;
-        $type = $sameMaterial ? $existing->fastener_type : $material?->fastenerType();
-        if ($type === null) {
-            throw ValidationException::withMessages(['catalog_material_id' => 'Выберите крепёж с размерами из каталога.']);
-        }
-        $diameter = $sameMaterial ? $existing->diameter : (float) $material->fastener_diameter;
-        $length = $sameMaterial ? $existing->length : (float) $material->fastener_length;
-        $part = $source->partDefinition;
-        [$uSize, $vSize, $depth] = match ($attributes['face']) {
-            'top', 'bottom' => [$part->length, $part->width, $part->thickness],
-            'left', 'right' => [$part->length, $part->thickness, $part->width],
-            'start', 'end' => [$part->width, $part->thickness, $part->length],
-        };
-        if ((float) $attributes['sink'] > $depth) {
-            throw ValidationException::withMessages(['sink' => 'Посадка глубже исходной детали.']);
-        }
-
-        $spacing = (float) ($attributes['spacing'] ?? 0);
-        if ($count > 1 && (! isset($attributes['row_axis']) || $spacing < $diameter)) {
-            throw ValidationException::withMessages(['spacing' => 'Укажите направление ряда и шаг не меньше диаметра крепежа.']);
-        }
-        $axis = $attributes['row_axis'] ?? 'u';
-        $radius = $diameter / 2;
-
-        return array_map(function (int $index) use ($attributes, $axis, $spacing, $uSize, $vSize, $radius, $length, $diameter, $type, $rowTargets): array {
-            $u = round((float) $attributes['center_u'] + ($axis === 'u' ? $index * $spacing : 0), 2);
-            $v = round((float) $attributes['center_v'] + ($axis === 'v' ? $index * $spacing : 0), 2);
-            if ($u < $radius || $u > $uSize - $radius || $v < $radius || $v > $vSize - $radius) {
-                throw ValidationException::withMessages(['center_u' => 'Крепёж выходит за рабочую грань. Сместите начало или измените шаг.']);
-            }
-
-            return [
-                ...Arr::except($attributes, ['count', 'row_axis', 'spacing', 'row_target_instance_ids']),
-                'target_instance_id' => $rowTargets[$index],
-                'center_u' => $u,
-                'center_v' => $v,
-                'diameter' => $diameter,
-                'length' => $length,
-                'fastener_type' => $type,
-            ];
-        }, range(0, $count - 1));
     }
 }

@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'woodworking' => [
+        'node' => env('WOODWORKING_NODE_BINARY', 'node'),
+        'chromium' => env('WOODWORKING_CHROMIUM_BINARY'),
+    ],
+
 ];

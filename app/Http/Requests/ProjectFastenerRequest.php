@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use Illuminate\Auth\Access\Response;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\Rule;
 
 class ProjectFastenerRequest extends FormRequest
 {
@@ -32,6 +33,9 @@ class ProjectFastenerRequest extends FormRequest
             'count' => [$this->isMethod('PUT') ? 'prohibited' : 'sometimes', 'integer', 'between:1,50'],
             'row_axis' => ['required_with:spacing', 'in:u,v'],
             'spacing' => ['required_with:row_axis', 'numeric', 'decimal:0,2', 'between:0.1,100000'],
+            'dry_run' => [$this->isMethod('POST') ? 'sometimes' : 'prohibited', 'boolean'],
+            'expected_revision' => [Rule::requiredIf($this->isMethod('POST') && $this->has('dry_run') && ! $this->boolean('dry_run')), 'integer', 'min:1'],
+            'suggest_targets' => [$this->isMethod('POST') && $this->boolean('dry_run') ? 'sometimes' : 'prohibited', 'boolean'],
         ];
     }
 }

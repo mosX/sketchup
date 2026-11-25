@@ -7,6 +7,23 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## Крепёж через MCP
+
+Сервер принимает запросы на `/api/mcp/woodworking`. Инструкции доступны при инициализации клиента, а схемы аргументов — в списке инструментов.
+
+1. Вызовите `woodworking_get_project`, чтобы получить ID экземпляров деталей. Для просмотра и редактирования общего каталога нужен глобальный ключ. Используйте `woodworking_list_material_catalog`, `woodworking_create_catalog_fastener` или `woodworking_update_catalog_fastener`.
+2. Вызовите `woodworking_place_fasteners` с координатами U/V на грани детали. Для ряда укажите `count`, `row_axis` и `spacing`. Чтобы проверить геометрию и получить предложения по второй детали, добавьте `suggest_targets: true` к предпросмотру. Для записи повторите вызов без этого параметра с `dry_run: false` и `expected_revision` из ответа. Передайте предложенные цели через `target_instance_id` для одной точки или через `row_target_instance_ids` для ряда.
+3. Для копирования используйте `woodworking_copy_fastener_row`. `mirror_u` и `mirror_v` отражают ряд. Параметр `suggest_targets: true` работает и при предпросмотре копии. Список целей идёт в порядке возрастания исходных ID крепежа.
+4. Для отверстий под шурупы вызовите `woodworking_prepare_fastener_drilling` сначала в режиме предпросмотра. Готовые шурупы и гвозди можно проверить инструментом `woodworking_analyze_fasteners`. Поле `approximate` указывает, что для части деталей расчёт выполнен по габаритам.
+
+Для геометрического анализа и подбора второй детали PHP запускает Node.js из `PATH`. На сервере должны быть установлены зависимости проекта через `npm ci`. Если PHP не видит Node.js, задайте полный путь к исполняемому файлу в `WOODWORKING_NODE_BINARY`.
+
+## Материалы через MCP
+
+В общем каталоге `woodworking_list_material_catalog` показывает позиции и их ID. Через `woodworking_create_catalog_material` и `woodworking_update_catalog_material` можно добавлять и редактировать доски, листы и расходники. Для каталога нужен глобальный ключ, для записи — право `projects:write`. Цена доски или листа задаётся за штуку, цена расходника — за упаковку.
+
+Для материала по умолчанию, назначений заготовкам и расходников проекта сначала вызовите `woodworking_get_project_materials`. Затем отправьте полный список через `woodworking_update_project_materials`, сохранив в нём нужные текущие позиции. Подтвердите результат вызовом с `dry_run: false` и `expected_revision` из предпросмотра. Количество расходника указывается в единице каталога.
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

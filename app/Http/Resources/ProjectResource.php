@@ -20,6 +20,7 @@ class ProjectResource extends JsonResource
             'description' => $this->description,
             'scene_data' => $this->scene_data,
             'revision' => $this->revision,
+            'render_settings' => (object) ($this->script_data['render_settings'] ?? $this->script_data['base_render_settings'] ?? []),
             'coordinate_system' => [
                 'units' => 'millimeters',
                 'angles' => 'degrees',

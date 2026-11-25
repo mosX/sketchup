@@ -24,8 +24,10 @@
             </div>
             <p v-else-if="report.total > report.unchecked" class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">Проблем с проверенным крепежом нет.</p>
             <p class="mt-2 text-xs text-stone-600">Проверено {{ report.total - report.unchecked }} из {{ report.total }}.</p>
-            <p v-if="report.approximate" class="mt-1 text-xs text-amber-800">Часть деталей проверена по габаритам. Чтобы повторить расчёт геометрии, нажмите «Пересчитать».</p>
-            <p v-if="report.unchecked" class="mt-1 text-xs text-stone-600">Без связанной второй детали · {{ report.unchecked }} шт.</p>
+            <p v-if="report.approximate && report.geometryUnchecked === undefined" class="mt-1 text-xs text-amber-800">Часть деталей проверена по габаритам. Чтобы повторить расчёт геометрии, нажмите «Пересчитать».</p>
+            <p v-if="report.geometryUnchecked" class="mt-1 text-xs text-amber-800">Не удалось проверить геометрию для {{ report.geometryUnchecked }} шт.</p>
+            <p v-if="report.timeLimitReached" class="mt-1 text-xs text-amber-800">Расчёт крепежа достиг ограничения по времени.</p>
+            <p v-if="report.unchecked" class="mt-1 text-xs text-stone-600">{{ report.geometryUnchecked === undefined ? 'Без связанной второй детали' : 'Крепёж без полной проверки' }} · {{ report.unchecked }} шт.</p>
         </template>
     </section>
 </template>

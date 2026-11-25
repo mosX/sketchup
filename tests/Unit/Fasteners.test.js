@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import axios from 'axios';
 import { computeMeshVolume } from 'three-bvh-csg';
 import { effectScope, nextTick } from 'vue';
@@ -78,6 +80,32 @@ test('machined stock reports a recessed floor and ignores a nearby stock whose c
     const unsupported = inspectFastenerReach(placed, targetFor(cutThrough, 3, 30), [targetFor(front, 4, 10)], material);
     assert.equal(unsupported.status, 'unsupported');
     geometry.forEach(entry => entry.received.dispose());
+});
+
+test('the server fastener checker reports a machined pocket for both placement and saved analysis', () => {
+    const front = { ...part, id: 1, name: 'Skin', instances: [{ ...instance(30), id: 1 }] };
+    const back = { ...part, id: 2, name: 'Support', instances: [{ ...instance(10), id: 2 }],
+        operations: [{ id: 'pocket', type: 'plunge_route', face: 'top', route_mode: 'point',
+            start_u: 250, start_v: 50, cutter_diameter: 20, cutter_profile: 'straight', cutter_angle: 0, depth: 12 }],
+    };
+    const path = fileURLToPath(new URL('../../resources/js/editor/fastenerAnalysisCli.js', import.meta.url));
+    const placement = { ...fastener, id: 1, source_instance_id: 1, target_instance_id: 2, diameter: 4, length: 25 };
+    const run = preview => {
+        const result = spawnSync(process.execPath, [path], {
+            input: JSON.stringify({ parts: [front, back], groups: [], fasteners: [placement], preview }),
+            encoding: 'utf8', timeout: 10000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+        return JSON.parse(result.stdout);
+    };
+    const preview = run(true);
+    assert.equal(preview[0].target_instance_id, null);
+    assert.equal(preview[0].reach.status, 'short');
+    const report = run(false);
+    assert.equal(report.approximate, false);
+    assert.equal(report.issueCount, 1);
+    assert.equal(report.issues[0].status, 'short');
+    assert.ok(Math.abs(report.issues[0].minimum - 7) < 1e-4);
 });
 
 test('clearance, countersink and a narrow pilot preserve the supported screw path', () => {

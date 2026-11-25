@@ -1,7 +1,9 @@
-import { operationSummary } from './operations/catalog.js';
+import { normalizeOperations, operationSummary } from './operations/catalog.js';
 import { faceLabel } from './operations/shared.js';
 
 export const partWorkshopCode = (id) => `Д-${String(id).padStart(3, '0')}`;
+export const workshopPartOperations = (part) => normalizeOperations(part)
+    .filter(operation => operation.enabled !== false && operation.status !== 'draft');
 
 const point = (u, v) => `U ${u} / V ${v} мм`;
 

@@ -59,8 +59,9 @@
         </section>
 
         <section>
-            <h2 class="mb-2 text-xl font-semibold">Карточки обработки</h2>
+            <h2 class="mb-2 text-xl font-semibold">Чертежи и карточки обработки</h2>
             <p class="mb-3 text-xs">База — локальные грани заготовки. Для U/V отсчёт начинается от кромок выбранной грани.</p>
+            <p class="mb-3 text-xs">Сплошные линии показывают видимый контур детали. Серый пунктир — исходная заготовка. Номера на видах соответствуют порядку операций. Масштаб видов условный.</p>
             <div v-if="hasFaceCoordinates" class="mb-4 text-xs">
                 <strong>Начало координат на каждой грани</strong>
                 <div>Верхняя пласть — U от начального торца, V от левой кромки. Нижняя — U от начального торца, V от правой кромки.</div>
@@ -71,6 +72,7 @@
                 <h3 class="workshop-keep text-sm font-semibold">{{ partWorkshopCode(card.id) }} · {{ card.name }} · ×{{ card.quantity }}</h3>
                 <p class="mt-1 text-xs">Заготовка {{ size(card.dimensions) }} мм · {{ stockByPart.get(card.id) ?? card.material ?? 'Материал не указан' }} · волокна {{ card.grain_axis === 'width' ? 'по ширине' : 'по длине' }}</p>
                 <p v-if="card.mirrored" class="mt-1 text-xs">Зеркальных экземпляров: {{ card.mirrored }}. Для них нужна зеркальная разметка операций.</p>
+                <WorkshopPartDrawing v-if="drawings.has(card.id)" :drawing="drawings.get(card.id)" class="mt-2"/>
                 <ol v-if="card.operations.length" class="mt-2 list-decimal space-y-1 pl-4 text-xs">
                     <li v-for="(operation, index) in card.operations" :key="operation.id ?? index" class="workshop-keep">
                         <strong>{{ operationLabel(operation) }}</strong> · {{ workshopOperationDetails(operation, card.dimensions.thickness) }}
@@ -86,9 +88,10 @@
 import { computed } from 'vue';
 import BoardCuttingDiagram from './BoardCuttingDiagram.vue';
 import WorkshopAssemblyDiagram from './WorkshopAssemblyDiagram.vue';
+import WorkshopPartDrawing from './WorkshopPartDrawing.vue';
 import { descendantGroupIds } from '../editor/assemblyTree.js';
-import { normalizeOperations, operationLabel } from '../editor/operations/catalog.js';
-import { partWorkshopCode, workshopOperationDetails } from '../editor/workshopPlan.js';
+import { operationLabel } from '../editor/operations/catalog.js';
+import { partWorkshopCode, workshopOperationDetails, workshopPartOperations } from '../editor/workshopPlan.js';
 
 const props = defineProps({
     projectName: { type: String, required: true },
@@ -96,6 +99,7 @@ const props = defineProps({
     parts: { type: Array, required: true },
     groups: { type: Array, required: true },
     report: { type: Object, required: true },
+    drawings: { type: Map, required: true },
 });
 
 const size = (dimensions) => [dimensions.length, dimensions.width, dimensions.thickness].join(' × ');
@@ -103,7 +107,7 @@ const cards = computed(() => props.parts.filter(part => part.instances?.length).
     ...part,
     quantity: part.instances.length,
     mirrored: part.instances.filter(instance => instance.mirrored).length,
-    operations: normalizeOperations(part).filter(operation => operation.enabled !== false && operation.status !== 'draft'),
+    operations: workshopPartOperations(part),
 })));
 const hasFaceCoordinates = computed(() => cards.value.some(card => card.operations.some(operation => ['groove', 'plunge_route', 'drill'].includes(operation.type))));
 const stockByPart = computed(() => {

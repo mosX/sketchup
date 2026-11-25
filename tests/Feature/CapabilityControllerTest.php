@@ -20,7 +20,13 @@ class CapabilityControllerTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.schema_version', 18)
+            ->assertJsonPath('data.schema_version', 24)
+            ->assertJsonPath('data.assembly_instructions.sequence_check', '/api/v1/projects/{project}/assembly-instructions/check')
+            ->assertJsonPath('data.assembly_check.tool', 'woodworking_check_assembly_geometry')
+            ->assertJsonPath('data.project_export.formats', ['obj', 'glb', 'png'])
+            ->assertJsonPath('data.assembly_instructions.camera.up_axis', 'z')
+            ->assertJsonPath('data.materials.project_plan.2', 'supplies')
+            ->assertJsonPath('data.fasteners.geometry_analysis', true)
             ->assertJsonPath('data.fasteners.types.1', 'nail')
             ->assertJsonPath('data.fasteners.copy.4', 'mirror_u')
             ->assertJsonPath('data.part_operations.groove.1', 'center_u')

@@ -55,7 +55,7 @@
         <div class="workspace-context">
             <button type="button" :aria-pressed="libraryVisible" @click="toggleWorkspacePanel('library')">☷ Заготовки и состав</button>
             <span class="workspace-context-label">{{ editorMode === 'part' ? 'Обработка заготовки' : 'Сборка изделия' }} <span aria-hidden="true">/</span> размеры в миллиметрах</span>
-            <button type="button" :aria-pressed="inspectorVisible" @click="toggleWorkspacePanel('inspector')">Настройки детали ☷</button>
+            <button type="button" :aria-pressed="inspectorVisible" @click="toggleWorkspacePanel('inspector')">{{ assemblyGuideActive ? 'Инструкция' : 'Настройки детали' }} ☷</button>
         </div>
         <div v-if="recovery.pending.value.length" class="flex flex-wrap items-center gap-3 bg-amber-100 px-4 py-2 text-sm text-amber-950" role="status">
             <span>Найден черновик: {{ recovery.pending.value[0].name }}</span><button class="font-semibold underline" @click="recovery.restore">Восстановить</button><button class="underline" @click="recovery.discard">Удалить черновик</button>
@@ -67,7 +67,7 @@
         </div>
 
         <div v-else class="editor-workspace editor-workspace-parts">
-            <aside class="parts-library">
+            <aside class="parts-library" :inert="assemblyGuideActive">
                 <div class="grid grid-cols-2 border-b border-stone-200 bg-stone-50 p-2">
                     <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'assembly' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-500'" type="button" @click="leftPanelMode = 'assembly'; editorMode = 'assembly'">Сборка</button>
                     <button class="rounded-lg px-2 py-2 text-xs font-semibold" :class="leftPanelMode === 'library' ? 'bg-white text-emerald-900 shadow-sm' : 'text-stone-500'" type="button" @click="leftPanelMode = 'library'">Заготовки</button>
@@ -160,11 +160,14 @@
 
             <main class="relative min-h-0 min-w-0">
                 <div class="view-tabs">
-                    <template v-if="editorMode === 'assembly'">
+                    <template v-if="assemblyGuideActive">
+                        <button class="view-tab view-tab-active" type="button" @click="inspectorVisible = true">Инструкция по сборке</button>
+                    </template>
+                    <template v-else-if="editorMode === 'assembly'">
                         <button class="view-tab" :class="{ 'view-tab-active': activeAssemblyGroupId === null }" type="button" @click="openAssemblyGroup(null)">Всё изделие</button>
                         <button v-for="group in assemblyBreadcrumbItems" :key="group.id" class="view-tab" :class="{ 'view-tab-active': group.id === activeAssemblyGroupId }" type="button" @click="openAssemblyGroup(group.id)">› {{ group.name }}</button>
                         <span v-if="isolatedGroup" class="ml-2 self-center rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold text-amber-700">Solo: {{ isolatedGroup.name }}</span>
-                        <div class="ml-auto flex items-center gap-2 px-2">
+                        <div v-if="!presentationEnabled" class="ml-auto flex items-center gap-2 px-2">
                             <button class="view-tab disabled:opacity-50" :class="{ 'view-tab-active': fastenerTool.active }" type="button" :aria-pressed="fastenerTool.active" :disabled="explodeDistance > 0" @click="toggleFastenerTool">Крепёж</button>
                             <button v-if="diagnosticFocusInstanceIds.length" class="view-tab view-tab-active" type="button" title="Вернуть отображение всей сборки" @click="clearDiagnosticFocus">Сбросить фокус</button>
                             <button class="view-tab" :class="{ 'view-tab-active': measurementTool === 'distance' }" type="button" @click="toggleMeasurement('distance')">Рулетка</button>
@@ -175,8 +178,10 @@
                                 <input v-model.number="explodeDistance" class="w-28 accent-emerald-700" type="range" min="50" max="1000" step="25">
                             </label>
                         </div>
-                        <button class="view-tab" type="button" disabled>Спереди</button>
-                        <button class="view-tab" type="button" disabled>Сверху</button>
+                        <button class="view-tab" :class="{ 'view-tab-active ml-auto': presentationEnabled }" type="button" :aria-pressed="presentationEnabled" @click="togglePresentation">{{ presentationEnabled ? 'К редактору' : 'Рендер' }}</button>
+                        <button v-if="!presentationEnabled" class="view-tab" type="button" @click="startAssemblyGuide">Инструкция</button>
+                        <button v-if="!presentationEnabled" class="view-tab" type="button" disabled>Спереди</button>
+                        <button v-if="!presentationEnabled" class="view-tab" type="button" disabled>Сверху</button>
                     </template>
                     <template v-else-if="activePart">
                         <button class="view-tab" :class="{ 'view-tab-active': !partContextInstance }" :aria-pressed="!partContextInstance" type="button" @click="partViewMode = 'solo'">Отдельно</button>
@@ -190,7 +195,18 @@
                     </template>
                 </div>
 
-                <div v-if="editorMode === 'assembly' && sectionAxis" class="absolute right-4 top-14 z-4 grid w-64 gap-3 rounded-xl border border-stone-200 bg-white/95 p-4 shadow-xl backdrop-blur">
+                <PresentationPanel
+                    v-if="presentationEnabled"
+                    v-model="presentationSettings"
+                    :status="presentationViewport?.renderStatus"
+                    :has-model="presentationViewport?.presentationHasModel"
+                    :saving="presentationSaving"
+                    :error="presentationError"
+                    @frame="presentationViewport.framePresentation()"
+                    @save="savePresentation"
+                />
+
+                <div v-if="!presentationEnabled && editorMode === 'assembly' && sectionAxis" class="absolute right-4 top-14 z-4 grid w-64 gap-3 rounded-xl border border-stone-200 bg-white/95 p-4 shadow-xl backdrop-blur">
                     <div class="flex items-center justify-between gap-3"><strong class="text-xs text-stone-700">Плоскость сечения</strong><button class="text-lg leading-none text-stone-400 hover:text-stone-700" type="button" aria-label="Закрыть сечение" @click="sectionAxis = null">×</button></div>
                     <div class="grid grid-cols-3 gap-1 rounded-lg bg-stone-100 p-1">
                         <button v-for="axis in axes" :key="axis" class="rounded-md py-1.5 text-xs font-bold uppercase text-stone-400" :class="{ 'bg-white text-emerald-800 shadow-sm': sectionAxis === axis }" type="button" @click="sectionAxis = axis">{{ axis }}</button>
@@ -202,19 +218,10 @@
                     <label class="flex items-center gap-2 text-xs text-stone-600"><input v-model="sectionInverted" class="accent-emerald-700" type="checkbox">Показать противоположную сторону</label>
                 </div>
 
-                <div v-if="editorMode === 'assembly' && assemblyGuideActive && currentAssemblyGuideStep" class="absolute right-4 bottom-14 z-4 w-72 rounded-xl border border-emerald-900/15 bg-white/95 p-4 shadow-xl backdrop-blur">
-                    <div class="flex items-start justify-between gap-3">
-                        <div><small class="font-semibold text-emerald-700">Шаг {{ assemblyGuideStep + 1 }} из {{ assemblyGuideSteps.length }}</small><strong class="mt-1 block text-sm text-stone-800">{{ currentAssemblyGuideStep.name }}</strong></div>
-                        <button class="text-lg leading-none text-stone-400 hover:text-stone-700" type="button" aria-label="Закрыть режим сборки" @click="finishAssemblyGuide">×</button>
-                    </div>
-                    <p class="mt-2 text-xs leading-5 text-stone-500">Добавьте {{ currentAssemblyGuideStep.instanceIds.length }} дет. этого узла. Уже пройденные шаги остаются на сцене полупрозрачными.</p>
-                    <div class="mt-3 flex items-center gap-2">
-                        <button class="button-secondary button-compact flex-1" type="button" :disabled="assemblyGuideStep === 0" @click="setAssemblyGuideStep(assemblyGuideStep - 1)">Назад</button>
-                        <button class="button-primary button-compact flex-1" type="button" @click="assemblyGuideStep === assemblyGuideSteps.length - 1 ? finishAssemblyGuide() : setAssemblyGuideStep(assemblyGuideStep + 1)">{{ assemblyGuideStep === assemblyGuideSteps.length - 1 ? 'Готово' : 'Далее' }}</button>
-                    </div>
-                </div>
-
                 <ThreeViewport
+                    ref="presentationViewport"
+                    :presentation-enabled="presentationEnabled"
+                    :presentation-settings="presentationSettings"
                     :mode="editorMode"
                     :parts="connectionViewportParts"
                     :active-part="partPreview"
@@ -224,17 +231,20 @@
                     :selected-group-instance-ids="groupMoveInstanceIds"
                     :group-move-instance-ids="groupMoveInstanceIds"
                     :group-move-block="groupMoveBlock"
-                    :transform-busy="saveState === 'saving' || historyBusy || Boolean(activeConnectionPreview) || fastenerTool.active"
+                    :transform-busy="assemblyGuideActive || saveState === 'saving' || historyBusy || Boolean(activeConnectionPreview) || fastenerTool.active"
                     :commit-scale="commitScale"
-                    :pickable-instance-ids="assemblyPickableInstanceIds"
+                    :pickable-instance-ids="assemblyGuideActive ? viewportVisibleInstanceIds : assemblyPickableInstanceIds"
                     :selected-operation-id="selectedOperationId"
                     :visible-instance-ids="viewportVisibleInstanceIds"
-                    :locked-instance-ids="assemblyInstanceState.lockedInstanceIds"
+                    :locked-instance-ids="assemblyGuideActive ? undefined : assemblyInstanceState.lockedInstanceIds"
                     :ghosted-instance-ids="viewportGhostedInstanceIds"
                     :explode-distance="explodeDistance"
                     :focused-instance-ids="viewportFocusedInstanceIds"
+                    :instruction-highlight-ids="assemblyGuideHighlights"
+                    :instruction-fastener-ids="assemblyGuideActiveFastenerIds"
                     :focus-request-id="diagnosticFocusRequestId"
                     :focused-fasteners="diagnosticFastenerFocus"
+                    :intersection-bounds="diagnosticIntersection"
                     :measurement-tool="measurementTool"
                     :measurement-reset-id="measurementResetId"
                     :section-axis="sectionAxis"
@@ -243,7 +253,7 @@
                     :connections="projects.connections"
                     :selected-connection-id="selectedConnectionId"
                     :connection-machining-preview="activeConnectionPreview"
-                    :fasteners="fastenerTool.items"
+                    :fasteners="viewportFasteners"
                     :fastener-preview="fastenerTool.preview"
                     :assembly-geometry-cache="assemblyGeometryCache"
                     :fastener-machining-preview="fastenerTool.drillPreview"
@@ -275,6 +285,35 @@
             </main>
 
             <aside class="inspector-panel" aria-label="Свойства выделения">
+                <AssemblyInstructionsPanel
+                    v-if="assemblyGuideActive"
+                    :steps="assemblyGuideSteps"
+                    :step="currentAssemblyGuideStep"
+                    :index="assemblyGuideStep"
+                    :instances="assemblyGuideInstances"
+                    :fasteners="fastenerTool.items"
+                    :sequence="assemblyGuideSequence"
+                    :available="assemblyInstructions.available.value"
+                    :editing="assemblyInstructions.editing.value"
+                    :saved="Boolean(assemblyInstructions.saved.value.length)"
+                    :loading="assemblyInstructions.loading.value"
+                    :saving="assemblyInstructions.saving.value"
+                    :error="assemblyInstructions.error.value"
+                    @close="finishAssemblyGuide"
+                    @navigate="setAssemblyGuideStep"
+                    @edit="assemblyInstructions.edit"
+                    @cancel="cancelAssemblyGuideEditing"
+                    @add="addAssemblyGuideStep"
+                    @move="moveAssemblyGuideStep"
+                    @remove="removeAssemblyGuideStep"
+                    @patch="patchAssemblyGuideStep"
+                    @save="saveAssemblyGuide"
+                    @capture-camera="rememberAssemblyCamera"
+                    @inspect="inspectAssemblyGuideParts"
+                    @inspect-issue="inspectAssemblyGuideIssue"
+                    @print="printAssemblyInstructions"
+                />
+                <template v-else>
                 <FastenerPanel v-if="editorMode === 'assembly' && fastenerTool.active" :tool="fastenerTool" :instances="allAssemblyInstances"/>
                 <template v-else-if="editorMode === 'part' && partDraft">
                     <div class="inspector-section inspector-context">
@@ -721,6 +760,7 @@
                         <button v-if="!projects.parts.length" class="button-secondary mt-3 w-full" type="button" @click="showCreatePart = true">Создать заготовку</button>
                     </div>
                 </template>
+                </template>
             </aside>
         </div>
 
@@ -815,7 +855,7 @@
                         <p class="mt-2 text-sm leading-6 text-stone-500">Предварительная проверка конструкции и расчёт материала по текущей сборке.</p>
                     </div>
                     <div class="flex items-center gap-2">
-                        <button v-if="projectAnalysis" :disabled="projectAnalysisLoading || Boolean(projectAnalysisError)" class="button-secondary button-compact" type="button" @click="printWorkshopPlan">Карты деталей · PDF</button>
+                        <button v-if="projectAnalysis" :disabled="projectAnalysisLoading || workshopDrawingsLoading || Boolean(projectAnalysisError)" class="button-secondary button-compact" type="button" @click="printWorkshopPlan">{{ workshopDrawingsLoading ? 'Строим чертежи…' : 'Карты деталей · PDF' }}</button>
                         <button v-if="projectAnalysis" class="button-secondary button-compact" type="button" @click="exportManufacturingCsv">Скачать CSV</button>
                         <button class="icon-button" type="button" aria-label="Закрыть" @click="showProjectAnalysis = false">×</button>
                     </div>
@@ -855,15 +895,15 @@
                     <section class="mt-7">
                         <div class="flex items-center justify-between gap-3">
                             <h3 class="text-base font-semibold text-stone-800">Проверка конструкции</h3>
-                            <span class="status-pill">{{ projectAnalysis.diagnostics.warnings.length + projectAnalysis.diagnostics.review_items.length }} замечаний</span>
+                            <span class="status-pill">{{ projectAnalysis.diagnostics.warnings.length + preliminaryReviewItems.length }} замечаний</span>
                         </div>
-                        <div v-if="projectAnalysis.diagnostics.warnings.length || projectAnalysis.diagnostics.review_items.length" class="mt-3 grid gap-2 md:grid-cols-2">
+                        <div v-if="projectAnalysis.diagnostics.warnings.length || preliminaryReviewItems.length" class="mt-3 grid gap-2 md:grid-cols-2">
                             <button v-for="(warning, index) in projectAnalysis.diagnostics.warnings" :key="`warning-${index}`" class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-left transition hover:border-amber-400 hover:shadow-sm" type="button" @click="inspectAnalysisIssue(warning)">
                                 <strong class="text-xs text-amber-900">{{ analysisIssueTitle(warning.code) }}</strong>
                                 <p class="mt-1 text-xs leading-5 text-amber-700">{{ analysisIssueDetails(warning) }}</p>
                                 <small class="mt-2 block text-[10px] font-semibold text-amber-600">Показать на сцене →</small>
                             </button>
-                            <button v-for="(item, index) in projectAnalysis.diagnostics.review_items" :key="`review-${index}`" class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-left transition hover:border-sky-400 hover:shadow-sm" type="button" @click="inspectAnalysisIssue(item)">
+                            <button v-for="(item, index) in preliminaryReviewItems" :key="`review-${index}`" class="rounded-xl border border-sky-200 bg-sky-50 p-3 text-left transition hover:border-sky-400 hover:shadow-sm" type="button" @click="inspectAnalysisIssue(item)">
                                 <strong class="text-xs text-sky-900">{{ analysisIssueTitle(item.code) }}</strong>
                                 <p class="mt-1 text-xs leading-5 text-sky-700">{{ analysisIssueDetails(item) }}</p>
                                 <small class="mt-2 block text-[10px] font-semibold text-sky-600">Показать на сцене →</small>
@@ -872,10 +912,18 @@
                         <p v-else class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">Критичных замечаний в предварительной проверке нет.</p>
                     </section>
 
+                    <AssemblyGeometryDiagnostics
+                        :report="assemblyGeometryReport?.intersections"
+                        :loading="assemblyGeometryLoading"
+                        :error="assemblyGeometryError"
+                        @check="checkAssemblyGeometry"
+                        @inspect="inspectAnalysisIssue"
+                    />
+
                     <FastenerDiagnosticsPanel
-                        :report="fastenerAnalysis"
-                        :loading="fastenerAnalysisLoading"
-                        :error="fastenerAnalysisError"
+                        :report="assemblyGeometryReport?.fasteners ?? fastenerAnalysis"
+                        :loading="assemblyGeometryLoading || (!assemblyGeometryReport && fastenerAnalysisLoading)"
+                        :error="assemblyGeometryReport ? '' : fastenerAnalysisError"
                         @inspect="inspectAnalysisIssue"
                     />
 
@@ -929,7 +977,11 @@
                 :parts="projects.parts"
                 :groups="projects.assemblyGroups"
                 :report="workshopPrintReport.manufacturing"
+                :drawings="workshopPrintDrawings"
             />
+        </Teleport>
+        <Teleport v-if="assemblyInstructionsPrinting" to="body">
+            <AssemblyInstructionsPrint :project-name="projectName" :parts="projects.parts" :groups="projects.assemblyGroups" :steps="assemblyGuideSteps"/>
         </Teleport>
     </div>
 </template>
@@ -944,20 +996,29 @@ import ProjectVersionsDialog from '../components/ProjectVersionsDialog.vue';
 import ProjectMaterialsPanel from '../components/ProjectMaterialsPanel.vue';
 import FastenerPanel from '../components/FastenerPanel.vue';
 import FastenerDiagnosticsPanel from '../components/FastenerDiagnosticsPanel.vue';
+import AssemblyGeometryDiagnostics from '../components/AssemblyGeometryDiagnostics.vue';
 import { analyzeFasteners } from '../editor/fastenerDiagnostics.js';
 import { createFastenerGeometry } from '../editor/fastenerGeometry.js';
 import { createResultCache } from '../editor/geometry/resultCache.js';
+import { createGeometryWorkerClient } from '../editor/geometry/workerClient.js';
+import { buildWorkshopDrawing } from '../editor/geometry/workshopDrawing.js';
 import { useProjectFasteners } from '../editor/useProjectFasteners.js';
 import BoardCuttingDiagram from '../components/BoardCuttingDiagram.vue';
 import WorkshopPrint from '../components/WorkshopPrint.vue';
-import { partWorkshopCode } from '../editor/workshopPlan.js';
+import AssemblyInstructionsPanel from '../components/AssemblyInstructionsPanel.vue';
+import AssemblyInstructionsPrint from '../components/AssemblyInstructionsPrint.vue';
+import { partWorkshopCode, workshopPartOperations } from '../editor/workshopPlan.js';
 import { connectionMachiningPreviewParts } from '../editor/connections.js';
 import AssemblyPlacementPanel from '../components/AssemblyPlacementPanel.vue';
 import InspectorAction from '../components/InspectorAction.vue';
+import PresentationPanel from '../components/PresentationPanel.vue';
+import { presentationLightingDefaults } from '../editor/woodPresentation.js';
 import { usePartDraftRecovery } from '../editor/usePartDraftRecovery.js';
 import { useAuthStore } from '../stores/auth';
 import { useProjectScripts } from '../editor/useProjectScripts.js';
 import { assemblyShortcutKey, groupMoveLimit, translatedPosition } from '../editor/assemblyMove.js';
+import { describeAssemblySteps, emptyAssemblyStep, useAssemblyInstructions } from '../editor/assemblyInstructions.js';
+import { checkAssemblySequence, planAssemblySequence } from '../editor/assemblySequence.js';
 import { planAssemblyScale } from '../editor/assemblyScale.js';
 import {
     assemblyBreadcrumbs,
@@ -1016,6 +1077,41 @@ const projectDescription = ref('');
 const saveState = ref('saved');
 const groupMoveError = ref('');
 const editorMode = ref('assembly');
+const presentationViewport = ref(null);
+const presentationEnabled = ref(false);
+const presentationSaving = ref(false);
+const presentationError = ref('');
+const defaultPresentation = { wood: 'pine', finish: 'raw', light: 'studio', ...presentationLightingDefaults };
+const presentationSettings = ref({ ...defaultPresentation });
+const togglePresentation = () => {
+    presentationError.value = '';
+    if (!presentationEnabled.value) {
+        fastenerTool.close();
+        connectionPreview.value = null;
+    }
+    presentationEnabled.value = !presentationEnabled.value;
+};
+watch(editorMode, mode => {
+    if (mode !== 'assembly') presentationEnabled.value = false;
+});
+const savePresentation = async (format) => {
+    if (presentationSaving.value) return;
+    presentationSaving.value = true;
+    presentationError.value = '';
+    try {
+        const blob = await presentationViewport.value.capturePresentation(format);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${projectName.value.trim().replace(/[<>:"/\\|?*]/g, '-') || 'woodworking'}.${format}`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+        presentationError.value = `Не удалось сохранить ${format.toUpperCase()}.`;
+    } finally {
+        presentationSaving.value = false;
+    }
+};
 const partViewMode = ref('solo');
 const partContextInstanceId = ref(null);
 const leftPanelMode = ref('assembly');
@@ -1028,6 +1124,7 @@ const explodeDistance = ref(0);
 const diagnosticFocusInstanceIds = ref([]);
 const diagnosticFocusRequestId = ref(0);
 const diagnosticFastenerFocus = ref(null);
+const diagnosticIntersection = ref(null);
 const measurementTool = ref(null);
 const measurementResetId = ref(0);
 const sectionAxis = ref(null);
@@ -1035,6 +1132,10 @@ const sectionOffset = ref(0);
 const sectionInverted = ref(false);
 const assemblyGuideActive = ref(false);
 const assemblyGuideStep = ref(0);
+const assemblyGuideInspection = ref(null);
+const assemblyGuideIssue = ref(null);
+const assemblyInstructionsPrinting = ref(false);
+const assemblyInstructions = useAssemblyInstructions(projectId);
 const assemblySearch = ref('');
 const selectedPartId = ref(null);
 const selectedInstanceId = ref(null);
@@ -1049,6 +1150,12 @@ const creatingPart = ref(false);
 const createError = ref('');
 const showProjectAnalysis = ref(false);
 const workshopPrintReport = ref(null);
+const workshopPrintDrawings = ref(new Map());
+const workshopDrawingsLoading = ref(false);
+let workshopDrawingWorker = null;
+watch(showProjectAnalysis, open => {
+    if (!open) workshopDrawingWorker?.cancelAll();
+});
 const analysisPartId = ref(null);
 const showTemplateCreator = ref(false);
 const templateSaving = ref(false);
@@ -1098,6 +1205,12 @@ const connectionFaceLabels = {
 const projectAnalysis = ref(null);
 const projectAnalysisLoading = ref(false);
 const projectAnalysisError = ref('');
+const assemblyGeometryReport = ref(null);
+const assemblyGeometryLoading = ref(false);
+const assemblyGeometryError = ref('');
+let assemblyGeometryRequest = 0;
+const preliminaryReviewItems = computed(() => (projectAnalysis.value?.diagnostics.review_items ?? []).filter(item =>
+    item.code !== 'potential_intersection' || assemblyGeometryReport.value?.intersections.status !== 'complete'));
 const fastenerAnalysisLoading = ref(false);
 const fastenerAnalysisError = ref('');
 const cuttingSettings = reactive({
@@ -1158,6 +1271,8 @@ watch(() => projects.parts.map(part => part.id), fastenerGeometry.retain);
 const { applyScript } = useProjectScripts({
     projectId, projects, recordHistory,
     onApplied: async () => {
+        presentationSettings.value = { ...defaultPresentation, ...projects.activeProject?.render_settings };
+        await fastenerTool.reload().catch(() => {});
         selectedInstanceId.value = null;
         selectedOperationId.value = null;
         selectedPartId.value = null;
@@ -1280,9 +1395,14 @@ const assemblyPickableInstanceIds = computed(() => (
         ? null
         : assemblyInstanceState.value.visibleInstanceIds
 ));
-const viewportGhostedInstanceIds = computed(() => {
+const sameAssemblyList = (previous, ids) => previous?.length === ids.length && ids.every((id, index) => previous[index] === id) ? previous : ids;
+const viewportGhostedInstanceIds = computed((previous) => {
+    if (assemblyGuideActive.value) {
+        const active = new Set([...(currentAssemblyGuideStep.value?.instance_ids ?? []), ...assemblyGuideHighlights.value]);
+        return sameAssemblyList(previous, viewportVisibleInstanceIds.value.filter(id => !active.has(id)));
+    }
     const ids = new Set(ghostedAssemblyInstanceIdSet.value);
-    if (activeAssemblyGroupId.value !== null && isolatedGroupId.value === null && !assemblyGuideActive.value) {
+    if (activeAssemblyGroupId.value !== null && isolatedGroupId.value === null) {
         const inGroup = new Set(assemblyInstanceState.value.visibleInstanceIds);
         viewportVisibleInstanceIds.value.forEach(id => {
             if (!inGroup.has(id)) ids.add(id);
@@ -1290,43 +1410,40 @@ const viewportGhostedInstanceIds = computed(() => {
     }
     return [...ids];
 });
-const assemblyGuideSteps = computed(() => {
-    const steps = [];
-    const ungroupedInstanceIds = projects.parts.flatMap((part) => (part.instances ?? [])
-        .filter((instance) => instance.assembly_group_id === null)
-        .map((instance) => instance.id));
-
-    if (ungroupedInstanceIds.length) {
-        steps.push({ id: 'ungrouped', name: 'Основа изделия', instanceIds: ungroupedInstanceIds });
-    }
-
-    [...projects.assemblyGroups]
-        .sort((left, right) => Number(left.sort_order) - Number(right.sort_order) || left.id - right.id)
-        .forEach((group) => {
-            const instanceIds = projects.parts.flatMap((part) => (part.instances ?? [])
-                .filter((instance) => instance.assembly_group_id === group.id)
-                .map((instance) => instance.id));
-
-            if (instanceIds.length) {
-                steps.push({ id: group.id, name: group.name, instanceIds });
-            }
-        });
-
-    return steps;
-});
+const assemblyGuidePlan = computed(() => planAssemblySequence(assemblyInstructions.steps.value, fastenerTool.items));
+const assemblyGuideSteps = computed(() => describeAssemblySteps(assemblyInstructions.steps.value, projects.parts, fastenerTool.items, assemblyGuidePlan.value));
 const currentAssemblyGuideStep = computed(() => assemblyGuideSteps.value[assemblyGuideStep.value] ?? null);
-const assemblyGuideVisibleInstanceIds = computed(() => assemblyGuideSteps.value
-    .slice(0, assemblyGuideStep.value + 1)
-    .flatMap((step) => step.instanceIds));
+const assemblyGuideHighlights = computed(previous => sameAssemblyList(previous, assemblyGuideActive.value
+    ? assemblyGuideInspection.value ?? currentAssemblyGuideStep.value?.highlighted ?? []
+    : []));
+const assemblyGuideInstances = computed(() => projects.parts.flatMap(part => (part.instances ?? []).map(instance => ({
+    id: instance.id,
+    name: part.name,
+    label: `${partWorkshopCode(part.id)} · ${part.name} · №${instance.id}`,
+}))));
+const assemblyGuideSequence = computed(() => checkAssemblySequence(
+    assemblyInstructions.steps.value, assemblyGuideInstances.value, fastenerTool.items, assemblyGuidePlan.value,
+));
+const assemblyGuideActiveFastenerIds = computed(previous => sameAssemblyList(previous, assemblyGuideActive.value
+    ? assemblyGuideIssue.value?.fastener_ids ?? currentAssemblyGuideStep.value?.activeFastenerIds ?? [] : []));
+const assemblyGuideVisibleFastenerIds = computed(previous => sameAssemblyList(previous, [...new Set([
+    ...(currentAssemblyGuideStep.value?.visibleFastenerIds ?? []), ...(assemblyGuideIssue.value?.fastener_ids ?? []),
+])]));
+const viewportFasteners = computed(() => {
+    if (!assemblyGuideActive.value) return fastenerTool.items;
+    const included = new Set(assemblyGuideVisibleFastenerIds.value);
+    return fastenerTool.items.filter(item => included.has(item.id));
+});
 const viewportFocusedInstanceIds = computed(() => assemblyGuideActive.value
-    ? currentAssemblyGuideStep.value?.instanceIds ?? []
+    ? []
     : diagnosticFocusInstanceIds.value);
-const viewportVisibleInstanceIds = computed(() => {
-    let normalInstanceIds = assemblyGuideActive.value
-        ? assemblyGuideVisibleInstanceIds.value
-        : assemblyInstanceState.value.visibleInstanceIds;
+const viewportVisibleInstanceIds = computed((previous) => {
+    if (assemblyGuideActive.value) return sameAssemblyList(previous, [...new Set([
+        ...(currentAssemblyGuideStep.value?.visibleIds ?? []), ...(assemblyGuideIssue.value?.instance_ids ?? []),
+    ])]);
+    let normalInstanceIds = assemblyInstanceState.value.visibleInstanceIds;
 
-    if (!assemblyGuideActive.value && activeAssemblyGroupId.value !== null && isolatedGroupId.value === null) {
+    if (activeAssemblyGroupId.value !== null && isolatedGroupId.value === null) {
         const global = calculateAssemblyInstanceState(projects.assemblyGroups, projects.parts);
         normalInstanceIds = [...new Set([...normalInstanceIds, ...global.visibleInstanceIds])];
     }
@@ -1501,6 +1618,7 @@ onMounted(async () => {
         ]);
         projectName.value = project.name;
         projectDescription.value = project.description ?? '';
+        presentationSettings.value = { ...defaultPresentation, ...project.render_settings };
         selectedPartId.value = parts[0]?.id ?? null;
         parts.forEach((part) => { instanceQuantities[part.id] = 1; });
         recovery.load();
@@ -1902,11 +2020,22 @@ const assemblyPick = (instanceId) => resolveAssemblyPick(
     activeAssemblyGroupId.value,
 );
 const selectAssemblyPick = (instanceId) => {
+    if (assemblyGuideActive.value) {
+        if (assemblyInstructions.editing.value && instanceId !== null && currentAssemblyGuideStep.value) {
+            const highlighted = currentAssemblyGuideStep.value.highlighted;
+            patchAssemblyGuideStep({ highlight_instance_ids: highlighted.includes(instanceId)
+                ? highlighted.filter(id => id !== instanceId) : [...highlighted, instanceId] });
+        } else {
+            inspectAssemblyGuideParts(instanceId === null ? [] : [instanceId]);
+        }
+        return;
+    }
     const pick = assemblyPick(instanceId);
     if (pick?.kind === 'group') selectAssemblyGroup(pick.group);
     else selectInstance(pick?.id ?? null);
 };
 const openAssemblyPick = (instanceId) => {
+    if (assemblyGuideActive.value) return;
     const pick = assemblyPick(instanceId);
     if (pick?.kind === 'group') openAssemblyGroup(pick.group.id);
 };
@@ -2187,11 +2316,15 @@ const removeSelectedConnection = async () => {
     clearDiagnosticFocus();
 };
 
-const setDiagnosticFocus = (instanceIds, fasteners = null) => {
+const setDiagnosticFocus = (instanceIds, fasteners = null, intersection = null) => {
     diagnosticFocusInstanceIds.value = instanceIds;
     diagnosticFastenerFocus.value = fasteners;
+    diagnosticIntersection.value = intersection;
 };
 const clearDiagnosticFocus = () => setDiagnosticFocus([]);
+watch(() => projects.parts, () => {
+    if (diagnosticIntersection.value) clearDiagnosticFocus();
+}, { deep: true });
 
 const toggleFastenerTool = () => {
     if (fastenerTool.active) {
@@ -2217,32 +2350,101 @@ const toggleMeasurement = (tool) => {
     measurementResetId.value++;
 };
 
-const setAssemblyGuideStep = async (step) => {
+const setAssemblyGuideStep = async (step, issue = null) => {
     assemblyGuideStep.value = Math.max(0, Math.min(step, assemblyGuideSteps.value.length - 1));
-    selectedInstanceId.value = currentAssemblyGuideStep.value?.instanceIds[0] ?? null;
+    assemblyGuideIssue.value = issue;
+    assemblyGuideInspection.value = issue?.instance_ids.length ? issue.instance_ids : null;
     await nextTick();
-    diagnosticFocusRequestId.value++;
+    const current = currentAssemblyGuideStep.value;
+    if (!assemblyGuideActive.value || !current) return;
+    if (issue?.instance_ids.length) {
+        presentationViewport.value?.frameAssemblyInstances(issue.instance_ids);
+    } else if (current.camera) {
+        presentationViewport.value?.restoreAssemblyCamera(current.camera);
+    } else {
+        const ids = [...current.instance_ids, ...current.highlighted];
+        presentationViewport.value?.frameAssemblyInstances(ids.length ? ids : current.visibleIds);
+    }
 };
 
 const startAssemblyGuide = async () => {
-    if (!assemblyGuideSteps.value.length) {
-        window.alert('Сначала добавьте детали в сборку и распределите их по узлам.');
+    if (assemblyGuideActive.value) {
+        inspectorVisible.value = true;
         return;
     }
 
     editorMode.value = 'assembly';
+    presentationEnabled.value = false;
     activeAssemblyGroupId.value = null;
     isolatedGroupId.value = null;
+    selectedInstanceId.value = null;
+    selectedGroupId.value = null;
+    selectedConnectionId.value = null;
     explodeDistance.value = 0;
+    measurementTool.value = null;
+    sectionAxis.value = null;
+    fastenerTool.close();
+    connectionPreview.value = null;
     clearDiagnosticFocus();
+    inspectorVisible.value = true;
+    if (window.innerWidth <= 900) libraryVisible.value = false;
     assemblyGuideActive.value = true;
-    await setAssemblyGuideStep(0);
+    if (!assemblyInstructions.editing.value) {
+        await Promise.all([assemblyInstructions.load(), fastenerTool.reload().catch(() => {})]);
+        await setAssemblyGuideStep(0);
+    } else {
+        await setAssemblyGuideStep(assemblyGuideStep.value);
+    }
 };
 
 const finishAssemblyGuide = () => {
+    if (assemblyInstructions.saving.value) return;
     assemblyGuideActive.value = false;
+    assemblyGuideInspection.value = null;
+    assemblyGuideIssue.value = null;
     selectedInstanceId.value = null;
 };
+
+const patchAssemblyGuideStep = (patch) => {
+    const step = assemblyInstructions.draft.value?.[assemblyGuideStep.value];
+    if (step && !assemblyInstructions.saving.value) Object.assign(step, patch);
+};
+const addAssemblyGuideStep = () => {
+    const draft = assemblyInstructions.draft.value;
+    const index = draft.length ? assemblyGuideStep.value + 1 : 0;
+    draft.splice(index, 0, emptyAssemblyStep());
+    void setAssemblyGuideStep(index);
+};
+const moveAssemblyGuideStep = (offset) => {
+    const draft = assemblyInstructions.draft.value;
+    const index = assemblyGuideStep.value;
+    const destination = index + offset;
+    if (destination < 0 || destination >= draft.length) return;
+    const [step] = draft.splice(index, 1);
+    draft.splice(destination, 0, step);
+    void setAssemblyGuideStep(destination);
+};
+const removeAssemblyGuideStep = () => {
+    assemblyInstructions.draft.value.splice(assemblyGuideStep.value, 1);
+    void setAssemblyGuideStep(assemblyGuideStep.value);
+};
+const cancelAssemblyGuideEditing = () => {
+    assemblyInstructions.cancel();
+    void setAssemblyGuideStep(assemblyGuideStep.value);
+};
+const saveAssemblyGuide = async () => {
+    if (await assemblyInstructions.save()) await setAssemblyGuideStep(assemblyGuideStep.value);
+};
+const rememberAssemblyCamera = () => {
+    const camera = presentationViewport.value?.readAssemblyCamera();
+    if (camera) patchAssemblyGuideStep({ camera });
+};
+const inspectAssemblyGuideParts = (ids) => {
+    assemblyGuideIssue.value = null;
+    const current = assemblyGuideInspection.value;
+    assemblyGuideInspection.value = !ids.length || (current?.length === ids.length && ids.every(id => current.includes(id))) ? null : ids;
+};
+const inspectAssemblyGuideIssue = (issue) => setAssemblyGuideStep(issue.step_index ?? assemblyGuideStep.value, issue.context);
 
 const inspectAnalysisIssue = async (issue) => {
     const context = issue.context ?? {};
@@ -2269,12 +2471,13 @@ const inspectAnalysisIssue = async (issue) => {
         assemblyGuideActive.value = false;
         measurementTool.value = null;
         const fasteners = context.fastener_ids?.length ? { ids: context.fastener_ids, status: context.fastener_status } : null;
-        if (fasteners) {
+        if (fasteners || context.intersection_bounds_mm) {
+            presentationEnabled.value = false;
             fastenerTool.close();
             selectedConnectionId.value = null;
             sectionAxis.value = null;
         }
-        setDiagnosticFocus(instanceIds, fasteners);
+        setDiagnosticFocus(instanceIds, fasteners, context.intersection_bounds_mm);
         selectedInstanceId.value = fasteners ? null : instanceIds[0];
         selectedPartId.value = projects.parts.find((part) => part.instances?.some((instance) => instance.id === instanceIds[0]))?.id ?? selectedPartId.value;
         await nextTick();
@@ -2733,6 +2936,16 @@ const saveProject = async () => {
 const saveCurrent = () => editorMode.value === 'part' ? savePart() : saveProject();
 const handleEditorHistoryKey = (event) => {
     if (showScriptEditor.value || showVersions.value) return;
+    if (assemblyGuideActive.value && !showProjectAnalysis.value) {
+        if (event.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) finishAssemblyGuide();
+        return;
+    }
+    if (presentationEnabled.value && !showProjectAnalysis.value) {
+        if (event.key === 'Escape' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) {
+            presentationEnabled.value = false;
+        }
+        return;
+    }
     if (event.key === 'Escape' && fastenerTool.active && !fastenerTool.busy && !showProjectAnalysis.value) {
         if (fastenerTool.drillPreview) fastenerTool.cancelDrillPreview();
         else if (fastenerTool.copyDraft) fastenerTool.cancelCopy();
@@ -2777,6 +2990,9 @@ onBeforeUnmount(() => {
     window.clearTimeout(partHistoryTimer);
     window.removeEventListener('keydown', handleEditorHistoryKey);
     window.removeEventListener('afterprint', closeWorkshopPrint);
+    workshopDrawingWorker?.dispose();
+    workshopDrawingWorker = null;
+    window.removeEventListener('afterprint', closeAssemblyInstructionsPrint);
 });
 
 const openProjectAnalysis = async (partId = null) => {
@@ -2811,6 +3027,10 @@ const saveProjectTemplate = async () => {
 };
 
 const refreshProjectAnalysis = async () => {
+    assemblyGeometryRequest++;
+    assemblyGeometryReport.value = null;
+    assemblyGeometryLoading.value = false;
+    assemblyGeometryError.value = '';
     projectAnalysisLoading.value = true;
     projectAnalysisError.value = '';
     fastenerAnalysisLoading.value = true;
@@ -2833,19 +3053,77 @@ const refreshProjectAnalysis = async () => {
     await fasteners;
 };
 
+const checkAssemblyGeometry = async () => {
+    if (!projectAnalysis.value || projectAnalysisLoading.value || assemblyGeometryLoading.value) return;
+    const generation = ++assemblyGeometryRequest;
+    assemblyGeometryLoading.value = true;
+    assemblyGeometryReport.value = null;
+    assemblyGeometryError.value = '';
+    try {
+        const report = await projects.checkAssemblyGeometry(projectId, projectAnalysis.value.revision);
+        if (generation === assemblyGeometryRequest) assemblyGeometryReport.value = report;
+    } catch (error) {
+        if (generation !== assemblyGeometryRequest) return;
+        assemblyGeometryError.value = error.response?.status === 409
+            ? 'Проект изменился. Нажмите «Пересчитать» и запустите проверку заново.'
+            : 'Не удалось проверить геометрию сборки.';
+    } finally {
+        if (generation === assemblyGeometryRequest) assemblyGeometryLoading.value = false;
+    }
+};
+
 const csvCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
 const closeWorkshopPrint = () => {
     workshopPrintReport.value = null;
+    workshopPrintDrawings.value = new Map();
+};
+
+const closeAssemblyInstructionsPrint = () => { assemblyInstructionsPrinting.value = false; };
+const printAssemblyInstructions = async () => {
+    if (!assemblyGuideSteps.value.length || assemblyInstructionsPrinting.value) return;
+    assemblyInstructionsPrinting.value = true;
+    await nextTick();
+    window.addEventListener('afterprint', closeAssemblyInstructionsPrint, { once: true });
+    window.print();
 };
 
 const printWorkshopPlan = async () => {
-    if (!projectAnalysis.value || workshopPrintReport.value) return;
+    const report = projectAnalysis.value;
+    if (!report || workshopPrintReport.value || workshopDrawingsLoading.value) return;
 
-    workshopPrintReport.value = projectAnalysis.value;
-    await nextTick();
-    window.addEventListener('afterprint', closeWorkshopPrint, { once: true });
-    window.print();
+    workshopDrawingsLoading.value = true;
+    const worker = createGeometryWorkerClient(assemblyGeometryCache);
+    workshopDrawingWorker = worker;
+    try {
+        const drawings = new Map();
+        const usedParts = projects.parts.filter(part => part.instances?.length);
+        for (const saved of usedParts) {
+            const part = { ...saved, operations: workshopPartOperations(saved) };
+            let geometry;
+            let drawing;
+            try {
+                if (part.operations.length) ({ partGeometry: geometry } = await worker.calculate(part));
+                drawing = buildWorkshopDrawing(part, geometry);
+            } catch (error) {
+                if (error.name === 'AbortError') return;
+                drawing = buildWorkshopDrawing(part);
+            } finally {
+                geometry?.dispose();
+            }
+            if (!showProjectAnalysis.value || workshopDrawingWorker !== worker || projectAnalysis.value !== report) return;
+            drawings.set(part.id, drawing);
+        }
+        workshopPrintDrawings.value = drawings;
+        workshopPrintReport.value = report;
+        await nextTick();
+        window.addEventListener('afterprint', closeWorkshopPrint, { once: true });
+        window.print();
+    } finally {
+        worker.dispose();
+        if (workshopDrawingWorker === worker) workshopDrawingWorker = null;
+        workshopDrawingsLoading.value = false;
+    }
 };
 
 const exportManufacturingCsv = () => {

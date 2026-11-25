@@ -4,7 +4,10 @@ use App\Http\Controllers\Api\V1\ApiTokenController;
 use App\Http\Controllers\Api\V1\CapabilityController;
 use App\Http\Controllers\Api\V1\CatalogMaterialController;
 use App\Http\Controllers\Api\V1\ProjectAnalysisController;
+use App\Http\Controllers\Api\V1\ProjectAssemblyCheckController;
+use App\Http\Controllers\Api\V1\ProjectAssemblyInstructionsController;
 use App\Http\Controllers\Api\V1\ProjectCommandController;
+use App\Http\Controllers\Api\V1\ProjectExportController;
 use App\Http\Controllers\Api\V1\ProjectFastenerController;
 use App\Http\Controllers\Api\V1\ProjectMaterialsController;
 use App\Http\Controllers\Api\V1\ProjectSnapshotController;
@@ -74,6 +77,8 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
 
     Route::get('/capabilities', CapabilityController::class)
         ->middleware('ability:projects:read,projects:write');
+    Route::get('/script-api', [ProjectScriptController::class, 'api'])
+        ->middleware('ability:projects:read,projects:write');
 
     Route::get('/projects', [ProjectController::class, 'index'])
         ->middleware('ability:projects:read,projects:write');
@@ -91,7 +96,26 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
     Route::scopeBindings()->middleware('token.project')->group(function (): void {
         Route::get('/projects/{project}', ProjectSnapshotController::class)
             ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/export', ProjectExportController::class)
+            ->middleware(['ability:projects:read,projects:write', 'throttle:12,1'])
+            ->name('api.project.export');
+        Route::get('/projects/{project}/script', [ProjectScriptController::class, 'show'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::put('/projects/{project}/script', [ProjectScriptController::class, 'update'])
+            ->middleware('abilities:projects:write');
+        Route::post('/projects/{project}/script/run', [ProjectScriptController::class, 'run'])
+            ->middleware(['abilities:projects:write', 'throttle:30,1']);
+        Route::post('/projects/{project}/script/detach', [ProjectScriptController::class, 'detach'])
+            ->middleware('abilities:projects:write');
+        Route::get('/projects/{project}/assembly-instructions', [ProjectAssemblyInstructionsController::class, 'show'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/assembly-instructions/check', [ProjectAssemblyInstructionsController::class, 'check'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::put('/projects/{project}/assembly-instructions', [ProjectAssemblyInstructionsController::class, 'update'])
+            ->middleware('abilities:projects:write');
         Route::get('/projects/{project}/fasteners', [ProjectFastenerController::class, 'index'])
+            ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/fasteners/analysis', [ProjectFastenerController::class, 'analyze'])
             ->middleware('ability:projects:read,projects:write');
         Route::post('/projects/{project}/fasteners', [ProjectFastenerController::class, 'store'])
             ->middleware('abilities:projects:write');
@@ -156,6 +180,8 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'throttle:60,1'])->group(functi
             ->middleware('ability:projects:read,projects:write');
         Route::get('/projects/{project}/analysis', ProjectAnalysisController::class)
             ->middleware('ability:projects:read,projects:write');
+        Route::get('/projects/{project}/assembly-check', ProjectAssemblyCheckController::class)
+            ->middleware(['ability:projects:read,projects:write', 'throttle:12,1']);
         Route::get('/projects/{project}/materials', [ProjectMaterialsController::class, 'show'])
             ->middleware('ability:projects:read,projects:write');
         Route::put('/projects/{project}/materials', [ProjectMaterialsController::class, 'update'])

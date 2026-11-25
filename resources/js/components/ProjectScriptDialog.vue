@@ -8,7 +8,7 @@
             <div class="grid min-h-0 flex-1 overflow-auto lg:grid-cols-2">
                 <section class="flex min-h-[420px] flex-col gap-3 border-r border-stone-200 p-4">
                     <div class="flex flex-wrap items-center gap-2">
-                        <label class="text-xs text-stone-600">Пример <select class="ml-2 rounded-lg border border-stone-300 bg-white p-2" :disabled="busy" @change="loadExample($event)"><option value="">Выберите…</option><option value="bench">Скамья с повторяющимися ножками</option><option value="machining">Панель со сверлением</option><option value="joinery">Параметры, шип–паз и копии узла</option></select></label>
+                        <label class="text-xs text-stone-600">Пример <select class="ml-2 rounded-lg border border-stone-300 bg-white p-2" :disabled="busy" @change="loadExample($event)"><option value="">Выберите…</option><option value="bench">Скамья с повторяющимися ножками</option><option value="machining">Панель со сверлением</option><option value="joinery">Параметры, шип–паз и копии узла</option><option value="assembly">???? ? ??????????? ?? ??????</option></select></label>
                         <span class="ml-auto text-xs text-stone-500">{{ dirty ? 'Есть несохранённые изменения' : 'Код сохранён' }}</span>
                     </div>
                     <div v-if="localDraft" class="rounded-lg bg-amber-50 p-3 text-xs text-amber-900" role="status">Есть несохранённый локальный сценарий от {{ new Date(localDraft.savedAt).toLocaleString('ru') }}.<div class="mt-2 flex gap-3"><button type="button" class="underline" :disabled="busy" @click="restoreLocalDraft">Восстановить</button><button type="button" class="underline" :disabled="busy" @click="discardLocalDraft">Удалить черновик</button></div></div>
@@ -29,6 +29,10 @@
                             <p>Обработка проверяет положение исходных плоских граней и направления выборок; это не проверка прочности или полной собираемости изделия. Зазоры посадки и произвольный поворот профиля шипа пока не поддерживаются.</p>
                             <p>Короткие методы: <code>board.drill({ diameter: 8 }).groove({ depth: 6 }).roundover({ radius: 3 })</code>, <code>crossCut()</code>, <code>ripCut()</code>, <code>plungeRoute()</code>. Все возвращают заготовку; параметры можно задать явно через operation.</p>
                             <p><code>part.operation(type, parameters)</code> — обработка всех экземпляров заготовки. Типы: <code>cross_cut, rip_cut, groove, edge_roundover, plunge_route, drill</code>. Параметры совпадают с API инструментов.</p>
+                            <p><code>board.stock(catalogId)</code> назначает доску или лист, <code>defaultStock(catalogId)</code> задаёт материал проекта, <code>supply(catalogId, quantity)</code> добавляет расходник.</p>
+                            <p><code>fastener(source, { target, catalog_material_id, face, center_u, center_v, sink })</code> добавляет крепёж из каталога. Для ряда задайте <code>count, row_axis, spacing</code> и при необходимости <code>rowTargets</code>. Для шурупов есть <code>.prepareDrilling({ clearance_diameter, pilot, pilot_diameter, pilot_depth, countersink, countersink_diameter, countersink_depth })</code>.</p>
+                            <p><code>assemblyStep(title, { parts, highlight, fasteners, instruction, notes, camera })</code> добавляет шаг. В parts и highlight можно передавать экземпляры и узлы, ракурс задаётся через <code>camera: { position: [x,y,z], target: [x,y,z] }</code>.</p>
+                            <p><code>render({ wood: "pine", finish: "oil", light: "studio", exposure: -0.5 })</code> задаёт настройки режима «Рендер». Доступны также <code>keyPower, fillPower, azimuth, elevation</code>.</p>
                             <p><code>log(value)</code> — сообщение. Доступны переменные, функции, циклы и Math. Импорт библиотек, сеть и доступ к странице недоступны.</p>
                             <p>Лимиты: 3 секунды, 99 узлов/заготовок/экземпляров, 30 соединений, 50 операций на заготовку, 100 операций всего, включая обработку соединений.</p>
                         </div>
@@ -40,10 +44,20 @@
                         <div class="grid max-h-48 grid-cols-2 gap-3 overflow-auto"><label v-for="item in parameterDefinitions" :key="item.name" class="flex flex-col gap-1 text-xs">{{ item.label }}<input v-scrub-number v-model.number="parameterValues[item.name]" :placeholder="String(item.default)" :disabled="busy" type="number" :min="item.min" :max="item.max" :step="item.step" class="rounded-lg border border-emerald-200 bg-white p-2 text-sm"></label></div>
                         <p class="mt-2 text-xs text-emerald-800">После изменения нажмите «Предпросмотр».</p>
                     </div>
-                    <div class="flex items-center justify-between text-sm"><h3 class="font-semibold">Предпросмотр результата</h3><span class="text-xs text-stone-500">{{ previewParts.length }} заготовок · {{ instanceCount }} деталей</span></div>
+                    <div class="flex items-center justify-between gap-2 text-sm">
+                        <h3 class="font-semibold">Предпросмотр результата</h3>
+                        <span class="ml-auto text-xs text-stone-500">{{ previewParts.length }} заготовок · {{ instanceCount }} деталей</span>
+                        <button v-if="previewParts.length && Object.keys(previewRenderSettings).length" type="button" class="button-secondary button-compact" :aria-pressed="previewRender" @click="previewRender = !previewRender">Рендер</button>
+                    </div>
                     <div class="relative min-h-72 flex-1 overflow-hidden rounded-xl border border-stone-200 bg-stone-100">
-                        <ThreeViewport v-if="previewParts.length" :key="previewVersion" :parts="previewParts" :connections="previewConnections" :locked-instance-ids="previewInstanceIds" />
-                        <div v-else class="absolute inset-0 grid place-items-center p-8 text-center text-sm leading-6 text-stone-500">Запустите предпросмотр.<br>Существующее изделие не изменится.</div>
+                        <ThreeViewport v-if="previewParts.length" :key="previewVersion" :parts="previewParts" :connections="previewConnections" :fasteners="previewFasteners" :locked-instance-ids="previewInstanceIds" :presentation-enabled="previewRender" :presentation-settings="previewRenderSettings" />
+                        <div v-else class="absolute inset-0 grid place-items-center p-8 text-center text-sm leading-6 text-stone-500">{{ validatedPayload ? 'В этом сценарии нет новой геометрии.' : 'Запустите предпросмотр.' }}</div>
+                    </div>
+                    <div v-if="validatedPayload" class="grid gap-1 text-xs text-stone-700">
+                        <p>{{ previewFasteners.length }} ед. крепежа · {{ previewSteps.length }} шагов · {{ previewMaterialPlan?.assignments?.length ?? 0 }} назначений материала</p>
+                        <ol v-if="previewSteps.length" class="max-h-28 list-decimal overflow-y-auto pl-5">
+                            <li v-for="(step, index) in previewSteps" :key="index">{{ step.title }}</li>
+                        </ol>
                     </div>
                     <p v-if="error" role="alert" class="max-h-36 overflow-auto whitespace-pre-wrap rounded-xl bg-red-50 p-3 text-sm text-red-800">{{ error }}</p>
                     <p v-if="notice" role="status" class="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900">{{ notice }}</p>
@@ -64,7 +78,7 @@ import { vScrubNumber } from '../editor/scrubNumber.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import axios from 'axios';
 import ThreeViewport from './ThreeViewport.vue';
-import { joineryScript, machiningScript, starterScript } from '../editor/scriptApi.js';
+import { assemblyScript, joineryScript, machiningScript, starterScript } from '../editor/scriptApi.js';
 import { runScript } from '../editor/scriptSandbox.js';
 import { draftKey, readDraft, writeDraft, removeDraft } from '../editor/draftStorage.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -84,6 +98,11 @@ const notice = ref('');
 const logs = ref([]);
 const previewParts = ref([]);
 const previewConnections = ref([]);
+const previewFasteners = ref([]);
+const previewSteps = ref([]);
+const previewMaterialPlan = ref(null);
+const previewRender = ref(false);
+const previewRenderSettings = ref({});
 const parameterDefinitions = ref([]);
 const parameterValues = ref({});
 const savedValues = ref('{}');
@@ -142,6 +161,7 @@ const save = () => perform(async () => {
 const preview = () => perform(async () => {
     validatedPayload.value = null;
     previewParts.value = [];
+    previewRender.value = false;
     logs.value = [];
     abortController = new AbortController();
     running.value = true;
@@ -152,12 +172,18 @@ const preview = () => perform(async () => {
     const { data: current } = await axios.get(`/projects/${props.projectId}/script`);
     revision.value = current.data.revision;
     hasResult.value = current.data.has_result;
-    const payload = { source: source.value, commands: result.commands, connections: result.connections ?? [], parameter_values: parameterValues.value, expected_revision: revision.value };
+    const { logs: scriptLogs, ...compiled } = result;
+    delete compiled.parameters;
+    const payload = { ...compiled, source: source.value, parameter_values: parameterValues.value, expected_revision: revision.value };
     const { data } = await axios.post(`/projects/${props.projectId}/script/run`, { ...payload, dry_run: true });
     previewParts.value = data.data.parts;
     previewConnections.value = data.data.connections ?? [];
+    previewFasteners.value = data.data.fasteners ?? [];
+    previewSteps.value = data.data.assembly_steps ?? [];
+    previewMaterialPlan.value = data.data.material_plan ?? null;
+    previewRenderSettings.value = data.data.render_settings ?? {};
     previewVersion.value++;
-    logs.value = result.logs.slice(0, 50).map(value => String(value).slice(0, 500));
+    logs.value = scriptLogs.slice(0, 50).map(value => String(value).slice(0, 500));
     validatedPayload.value = payload;
     notice.value = 'Проверка пройдена. Результат ещё не применён.';
 });
@@ -168,7 +194,7 @@ const apply = () => perform(async () => {
     savedSource.value = source.value;
     savedValues.value = JSON.stringify(parameterValues.value);
     discardLocalDraft();
-    hasResult.value = result.root_group_id !== null;
+    hasResult.value = result.has_result;
     validatedPayload.value = null;
     notice.value = 'Применено. Закройте окно, чтобы продолжить работу в сборке. Ctrl+Z отменит запуск целиком.';
 });
@@ -194,7 +220,7 @@ const close = () => {
 const loadExample = (event) => {
     if (localDraft.value) { event.target.value = ''; return; }
     if (event.target.value && (!source.value || window.confirm('Заменить текст сценария примером?'))) {
-        source.value = { bench: starterScript, machining: machiningScript, joinery: joineryScript }[event.target.value];
+        source.value = { bench: starterScript, machining: machiningScript, joinery: joineryScript, assembly: assemblyScript }[event.target.value];
         parameterValues.value = {};
     }
     event.target.value = '';

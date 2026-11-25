@@ -30,6 +30,7 @@ class Project extends Model
             'scene_data' => 'array',
             'script_data' => 'array',
             'material_plan' => 'array',
+            'assembly_instructions' => 'array',
             'revision' => 'integer',
         ];
     }
